@@ -83,7 +83,8 @@ public sealed class SettingsStore
         s.DefaultPagesPerBatch = Math.Clamp(s.DefaultPagesPerBatch, 1, 10_000);
         s.DefaultDelayMinutes = Math.Clamp(s.DefaultDelayMinutes, 0, 24 * 60);
         s.RenderDpi = Math.Clamp(s.RenderDpi, 96, 600);
-        s.SpoolerPollSeconds = Math.Clamp(s.SpoolerPollSeconds, 1, 60);
+        // Zero is meaningful: poll the queue on every tick.
+        s.SpoolerPollSeconds = Math.Clamp(s.SpoolerPollSeconds, 0, 60);
         s.DevicePollSeconds = Math.Clamp(s.DevicePollSeconds, 5, 600);
         s.RetryIntervalMinutes = Math.Clamp(s.RetryIntervalMinutes, 1, 24 * 60);
         s.MaxAutoRetries = Math.Clamp(s.MaxAutoRetries, 1, 10);

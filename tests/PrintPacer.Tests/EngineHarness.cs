@@ -66,6 +66,9 @@ public sealed class EngineHarness : IAsyncDisposable
             RetryIntervalMinutes = 5,
             MaxAutoRetries = 3,
             StallTimeoutMinutes = 30,
+            // Poll the simulated queue on every tick, so the simulated printer cannot
+            // finish a batch in the gap between two polls.
+            SpoolerPollSeconds = 0,
             BlockedGiveUpMinutes = 240,
             KeepAwakeWhilePrinting = true,
         };

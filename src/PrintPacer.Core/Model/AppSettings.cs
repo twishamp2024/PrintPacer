@@ -14,7 +14,11 @@ public sealed class AppSettings
     public bool Grayscale { get; set; }
 
     // ---- Monitoring ---------------------------------------------------------
-    /// <summary>How often the engine polls the spooler while a batch is in flight.</summary>
+    /// <summary>
+    /// How often the Windows print queue is polled while a batch is in flight. Cheap, so
+    /// the default is frequent; the value exists mainly so a misbehaving driver can be
+    /// polled more gently.
+    /// </summary>
     public int SpoolerPollSeconds { get; set; } = 2;
 
     /// <summary>How often the device (IPP / HP LEDM) is polled. Kept gentle to avoid nagging the printer.</summary>
@@ -52,9 +56,11 @@ public sealed class AppSettings
     public bool NotifyOnJobComplete { get; set; } = true;
 
     // ---- Files ----------------------------------------------------------------
-    /// <summary>Null means use the per-user application data directory.</summary>
-    public string? TempDirectoryOverride { get; set; }
-    public bool DeleteTempFilesAfterBatch { get; set; } = true;
+    //
+    // There is deliberately no temporary-file setting here. The print engine reads page
+    // ranges straight out of the source PDF and draws them; it never writes an
+    // intermediate file. That removes temporary-file cleanup as a category of bug
+    // entirely, rather than making it configurable.
     public int LogRetentionDays { get; set; } = 30;
 
     // ---- Startup / resume -------------------------------------------------------

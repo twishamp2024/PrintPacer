@@ -474,7 +474,7 @@ public sealed class JobEngine : IAsyncDisposable
                 lines.Add("Batches");
                 lines.Add(new string('-', 78));
 
-                foreach (var batch in job.Batches.OrderBy(b => b.Number))
+                foreach (var batch in job.Batches.OrderBy(b => b.FirstPage))
                 {
                     lines.Add($"  Batch {batch.Number,-3} {batch.RangeLabel,-18} {batch.State,-15} " +
                               $"confirmed {batch.PagesConfirmedPrinted}/{batch.PageCount}");
@@ -609,7 +609,7 @@ public sealed class JobEngine : IAsyncDisposable
         // the question the user still has to answer.
         var unresolved = job.Batches
             .Where(b => b.State is BatchState.NeedsAttention or BatchState.Failed)
-            .OrderBy(b => b.Number)
+            .OrderBy(b => b.FirstPage)
             .FirstOrDefault();
 
         if (unresolved is not null)
@@ -627,7 +627,7 @@ public sealed class JobEngine : IAsyncDisposable
 
         var batch = job.Batches
             .Where(b => b.State == BatchState.Pending)
-            .OrderBy(b => b.Number)
+            .OrderBy(b => b.FirstPage)
             .FirstOrDefault();
 
         if (batch is null)
@@ -734,6 +734,17 @@ public sealed class JobEngine : IAsyncDisposable
     {
         var job = run.Job;
         var attempt = run.Attempt;
+
+        // Poll the queue at the configured interval rather than on every tick. The tick
+        // itself stays at one second so countdowns and cancellation remain responsive.
+        // Zero means poll on every tick, which the test suite uses so that a simulated
+        // printer cannot race ahead of the monitor.
+        if (_settings.SpoolerPollSeconds > 0)
+        {
+            if (run.NextSpoolerPollUtc is { } due && _clock.UtcNow < due) return;
+            run.NextSpoolerPollUtc = _clock.UtcNow +
+                TimeSpan.FromSeconds(Math.Min(_settings.SpoolerPollSeconds, 60));
+        }
 
         // ---- Observe the Windows queue --------------------------------------
         var jobs = _spooler.ListJobs(job.PrinterName, out var querySucceeded);
@@ -1271,9 +1282,38 @@ public sealed class JobEngine : IAsyncDisposable
 
     private async Task CancelSpoolerJobAsync(ActiveRun run, string why)
     {
-        if (run.Attempt.SpoolerJobId is not { } jobId) return;
+        var jobId = run.Attempt.SpoolerJobId;
 
-        if (_spooler.CancelJob(run.Job.PrinterName, jobId, out var error))
+        // The id is discovered a moment after submission, so a cancel issued in that window
+        // would otherwise find nothing to cancel and let the batch print anyway - after the
+        // user had been told it was stopped. Fall back to finding the job by its document
+        // token, which is unique to this attempt.
+        if (jobId is null)
+        {
+            var queued = _spooler.ListJobs(run.Job.PrinterName, out var querySucceeded);
+            if (querySucceeded)
+            {
+                jobId = queued
+                    .FirstOrDefault(j => string.Equals(j.Document, run.Attempt.DocumentToken,
+                        StringComparison.Ordinal))?.JobId;
+
+                if (jobId is not null)
+                {
+                    run.Attempt.SpoolerJobId = jobId;
+                    _store.UpdateAttempt(run.Attempt);
+                }
+            }
+        }
+
+        if (jobId is null)
+        {
+            Record(run.Job, "Information", "Printer",
+                $"No Windows print job was found for batch {run.Batch.Number} to cancel.",
+                "It had not reached the queue, or had already left it.");
+            return;
+        }
+
+        if (_spooler.CancelJob(run.Job.PrinterName, jobId.Value, out var error))
         {
             Record(run.Job, "Information", "Printer",
                 $"Cancelled the Windows print job for batch {run.Batch.Number} because {why}.");
@@ -1738,6 +1778,7 @@ public sealed class JobEngine : IAsyncDisposable
         public DateTimeOffset LastProgressUtc { get; set; }
         public DateTimeOffset? LeftQueueUtc { get; set; }
         public DateTimeOffset? NextCounterReadUtc { get; set; }
+        public DateTimeOffset? NextSpoolerPollUtc { get; set; }
         public long? LastCounterReading { get; set; }
         public int StableCounterReads { get; set; }
         public bool SawJobInQueue { get; set; }

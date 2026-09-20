@@ -24,7 +24,9 @@ public static class AppPaths
     public static string DatabasePath => Path.Combine(Root, "jobs.db");
     public static string SettingsPath => Path.Combine(Root, "settings.json");
     public static string LogDirectory => Path.Combine(Root, "logs");
-    public static string DefaultTempDirectory => Path.Combine(Root, "temp");
+
+    // No temporary directory: the print engine draws page ranges directly from the source
+    // PDF and never writes an intermediate file, so there is nothing to clean up.
 
     /// <summary>Guards against two copies of the application driving the same queue.</summary>
     public const string SingleInstanceMutex = @"Global\PrintPacer.SingleInstance.v1";
@@ -33,6 +35,5 @@ public static class AppPaths
     {
         Directory.CreateDirectory(Root);
         Directory.CreateDirectory(LogDirectory);
-        Directory.CreateDirectory(DefaultTempDirectory);
     }
 }

@@ -105,7 +105,7 @@ public sealed record JobSnapshot
 
     public BatchSnapshot? NextPendingBatch => Batches
         .Where(b => b.State == BatchState.Pending)
-        .OrderBy(b => b.Number)
+        .OrderBy(b => b.FirstPage)
         .FirstOrDefault();
 
     public int PendingBatchCount => Batches.Count(b => b.State == BatchState.Pending);
@@ -136,6 +136,6 @@ public sealed record JobSnapshot
         LastError = job.LastError,
         Title = job.Title,
         FileSha256 = job.FileSha256,
-        Batches = job.Batches.OrderBy(b => b.Number).Select(BatchSnapshot.From).ToList(),
+        Batches = job.Batches.OrderBy(b => b.FirstPage).Select(BatchSnapshot.From).ToList(),
     };
 }

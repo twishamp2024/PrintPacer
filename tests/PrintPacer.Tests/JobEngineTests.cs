@@ -359,6 +359,47 @@ public class JobEngineTests
         remainder.FirstPage.Should().Be(21, "pages 1-20 already came out");
         remainder.LastPage.Should().Be(50);
         h.Job.Batches.Single(b => b.Number == 1).State.Should().Be(BatchState.Skipped);
+
+        // The remainder carries a higher batch number than the batches after it, so the
+        // engine must order by page rather than by number. Ordering by number would stack
+        // the output tray out of sequence.
+        h.Job.Batches.Select(b => b.FirstPage).Should().BeInAscendingOrder(
+            "the batch list must read in document order, whatever the batch numbers are");
+    }
+
+    [Fact]
+    public async Task AResumedRemainderPrintsBeforeTheLaterBatchesNotAfterThem()
+    {
+        // The whole document is printed, with one batch interrupted part-way, and the
+        // order in which pages reach the printer is checked end to end.
+        await using var h = await EngineHarness.CreateAsync(150, s => s.StallTimeoutMinutes = 10);
+        h.Printer.PagesPerAdvance = 5;
+        h.Printer.StallAfterPages = 20;
+
+        var job = await h.CreateJobAsync(pagesPerBatch: 50, delayMinutes: 0);
+        h.Engine.StartJob(job.Id);
+
+        (await h.WaitUntilAsync(() =>
+            h.Job.Batches[0].SpoolerPagesPrinted == 20)).Should().BeTrue(h.Diagnostics());
+        h.Clock.Advance(TimeSpan.FromMinutes(11));
+        (await h.WaitForStateAsync(JobState.NeedsAttention, 15_000)).Should().BeTrue(h.Diagnostics());
+
+        h.Printer.StallAfterPages = null;
+        h.Engine.CancelCurrentSpoolerJob(job.Id);
+        await Task.Delay(100);
+        h.Engine.ResumeBatchFrom(job.Id, 1, printedPages: 20);
+
+        (await h.WaitForStateAsync(JobState.Completed, 30_000)).Should().BeTrue(h.Diagnostics());
+
+        // Pages 21-50 must have been submitted before pages 51-100.
+        var order = h.PrintEngine.SubmittedTokens
+            .Select(t => System.Text.RegularExpressions.Regex.Match(t, @"\[(\d+)-\d+\]"))
+            .Where(m => m.Success)
+            .Select(m => int.Parse(m.Groups[1].Value))
+            .ToList();
+
+        order.Should().Equal(new[] { 1, 21, 51, 101 },
+            "batches must reach the printer in page order, including a resumed remainder");
     }
 
     // ---- Duplicate-print safety --------------------------------------------------

@@ -76,9 +76,17 @@ public sealed class PrintJob
 
     public Batch? CurrentBatch => Batches.FirstOrDefault(b => b.Number == CurrentBatchNumber);
 
+    /// <summary>
+    /// The next batch to send, in document order.
+    ///
+    /// Ordered by first page rather than by batch number on purpose. When a partly printed
+    /// batch is split, the remainder is added with a new, higher number, so ordering by
+    /// number would send it after every later batch and stack the output tray out of
+    /// sequence. Page order is what the reader actually cares about.
+    /// </summary>
     public Batch? NextPendingBatch => Batches
         .Where(b => b.State == BatchState.Pending)
-        .OrderBy(b => b.Number)
+        .OrderBy(b => b.FirstPage)
         .FirstOrDefault();
 
     public bool IsTerminal => State is JobState.Completed or JobState.Failed or JobState.Cancelled;
