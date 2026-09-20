@@ -276,15 +276,32 @@ All rejected at load, before a job is created — not halfway through batch 3.
 
 ### Installer
 
-Installed, verified, uninstalled and reinstalled:
+`PrintPacer-Setup-1.0.0.exe` — a single 51.4 MB file compressed from the 157 MB
+payload. Tested from a verified-empty starting state: the previous install, both
+shortcuts and the Add/Remove entry were all removed and confirmed absent first.
 
-- 266 files (156.7 MB) to `%LOCALAPPDATA%\Programs\PrintPacer`
-- Start Menu and Desktop shortcuts with correct target and icon
-- Registered in **Settings → Apps → Installed apps** with a working uninstall
-  command
-- The installed copy launches and runs
-- Uninstall removes the program, both shortcuts and the registry entry, and
-  **keeps** `%LOCALAPPDATA%\PrintPacer` so logs survive
+| Check | Result |
+|---|---|
+| Installs to Program Files | `C:\Program Files\PrintPacer` |
+| Silent install exit code | 0 |
+| **Executable byte-identical to the tested build** | **PASS** — SHA-256 `7AC8F4E3…CC79B`, 167,936 bytes |
+| **All 266 payload files byte-identical** | **PASS** — 266 compared, 0 mismatches |
+| Directory structure preserved | 266 files + uninstaller |
+| Start Menu shortcut | present, targets the installed exe |
+| Desktop shortcut when requested | present |
+| Desktop shortcut when *not* requested | correctly absent |
+| Uninstaller | `unins000.exe`, registered in Add/Remove Programs |
+| Launches from the Start Menu shortcut | runs as `DESKTOP-…\tissue`, **not elevated**, from Program Files |
+| Finds its data and hardware after install | engine started, printer probe reported the page counter available |
+
+Uninstall was then run and verified to leave nothing behind — no program
+directory, no Start Menu folder, no shortcuts, no Add/Remove entry — while
+**keeping** `%LOCALAPPDATA%\PrintPacer` so the job history and logs survive.
+A final clean install was performed from that empty state and re-verified.
+
+The byte-identity check is the one worth stressing: the executable a user ends
+up running is provably the exact binary that passed the tests above, not a
+rebuild that happens to resemble it.
 
 ---
 

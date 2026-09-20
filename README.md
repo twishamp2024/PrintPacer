@@ -60,25 +60,24 @@ PrintPacer just asks you to confirm more often, which is the honest trade.
 **Requirements:** Windows 10 or 11, 64-bit. Nothing else — the build is
 self-contained, so .NET does not need to be installed.
 
-Build it, then run the installer:
+Double-click **`PrintPacer-Setup-1.0.0.exe`** (51 MB). It installs to
+`C:\Program Files\PrintPacer`, adds a Start Menu shortcut, offers a Desktop
+shortcut, and registers a proper uninstaller in **Settings → Apps**.
 
-```
-.\build.ps1
-.\publish\Install-PrintPacer.cmd
-```
+Installing needs administrator approval, as anything writing to Program Files
+does. **Running** PrintPacer afterwards does not: it works entirely as a
+standard user, keeping its jobs, settings and logs in your own profile. A user
+who cannot elevate is offered a per-user install instead.
 
-This installs to `%LOCALAPPDATA%\Programs\PrintPacer`, adds a Start Menu
-shortcut, and registers in **Settings → Apps → Installed apps**. No
-administrator rights are needed at any point.
+To build the installer yourself:
 
-For a classic `setup.exe` instead:
-
-```
+```powershell
 winget install JRSoftware.InnoSetup
 .\build.ps1 -Installer
 ```
 
-See [docs/BUILD.md](docs/BUILD.md) for the full details.
+See [docs/BUILD.md](docs/BUILD.md) for the full details, including a per-user
+install that needs no administrator rights at all.
 
 ---
 

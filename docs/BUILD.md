@@ -59,39 +59,59 @@ Run with `--verbose` for debug-level logging, including data-binding failures:
 
 ## Installing
 
-### Without extra tooling
-
-```powershell
-.\publish\Install-PrintPacer.cmd
-```
-
-Per-user install to `%LOCALAPPDATA%\Programs\PrintPacer`, Start Menu shortcut,
-and an entry in **Settings → Apps → Installed apps**. No administrator rights.
-
-```powershell
-# Options
-.\Install-PrintPacer.ps1 -DesktopShortcut
-.\Install-PrintPacer.ps1 -Uninstall
-.\Install-PrintPacer.ps1 -Uninstall -RemoveData   # also deletes jobs, settings, logs
-```
-
-An upgrade replaces the program files but **never** touches
-`%LOCALAPPDATA%\PrintPacer`, so upgrading mid-job does not lose the job.
-
-### As a setup.exe
+### The setup.exe (what end users get)
 
 ```powershell
 winget install JRSoftware.InnoSetup
 .\build.ps1 -Installer
 ```
 
-Produces `installer\output\PrintPacer-Setup-1.0.0.exe`, with optional desktop
-shortcut, optional start-with-Windows, and an **Open with → PrintPacer** verb on
-PDFs (registered as a verb, so your usual PDF reader stays the default).
+Produces `installer\output\PrintPacer-Setup-1.0.0.exe` — a single 51 MB file
+compressed from the 157 MB payload, which a user downloads and double-clicks.
 
-Both installers are per-user by design: PrintPacer needs no elevated privileges
-to read print queues, submit jobs or cancel its own jobs, so the installer does
-not demand them either.
+Installs to `C:\Program Files\PrintPacer` for all users, with a Start Menu
+shortcut, an optional Desktop shortcut, an optional start-with-Windows entry,
+an **Open with → PrintPacer** verb on PDFs (a verb only — the default PDF
+reader is untouched), and an uninstaller in **Settings → Apps**.
+
+Installing needs administrator approval because it writes to Program Files.
+Running the application afterwards does not: PrintPacer needs no elevated
+privileges to read print queues, submit jobs or cancel its own jobs, and its
+data lives in the per-user `%LOCALAPPDATA%\PrintPacer`. A user who cannot
+elevate is offered a per-user install instead.
+
+Useful switches:
+
+```powershell
+PrintPacer-Setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+PrintPacer-Setup-1.0.0.exe /VERYSILENT /TASKS=desktopicon
+PrintPacer-Setup-1.0.0.exe /LOG=setup.log
+```
+
+The setup declares `AppMutex`, so if PrintPacer is running when an upgrade
+starts, the user is asked to close it rather than the install failing on a
+locked file.
+
+### Without any extra tooling
+
+If you would rather not install Inno Setup, or want an install with no
+administrator step at all:
+
+```powershell
+.\publish\Install-PrintPacer.cmd
+```
+
+Per-user install to `%LOCALAPPDATA%\Programs\PrintPacer`, Start Menu shortcut,
+and an entry in **Settings → Apps → Installed apps**.
+
+```powershell
+.\Install-PrintPacer.ps1 -DesktopShortcut
+.\Install-PrintPacer.ps1 -Uninstall
+.\Install-PrintPacer.ps1 -Uninstall -RemoveData   # also deletes jobs, settings, logs
+```
+
+Both paths leave `%LOCALAPPDATA%\PrintPacer` alone on upgrade and on uninstall,
+so upgrading mid-job does not lose the job and the logs survive removal.
 
 ---
 

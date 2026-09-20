@@ -103,12 +103,28 @@ Copy-Item (Join-Path $root 'installer\Install-PrintPacer.cmd') (Split-Path $publ
 if ($Installer) {
     Write-Step 'Compiling the Inno Setup installer'
 
-    $iscc = @(
-        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-        "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
-        "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
-        "$env:ProgramFiles\Inno Setup 7\ISCC.exe"
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    # Inno Setup can land in Program Files, in the per-user Programs folder (which
+    # is where winget puts it by default), or simply on the PATH. Ask the registry
+    # too, so an install in an unusual location is still found.
+    $isccCandidates = @()
+
+    foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)},
+                        (Join-Path $env:LOCALAPPDATA 'Programs'))) {
+        if (-not $base) { continue }
+        foreach ($version in 6..8) {
+            $isccCandidates += Join-Path $base "Inno Setup $version\ISCC.exe"
+        }
+    }
+
+    foreach ($hive in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
+        Get-ItemProperty $hive -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -like 'Inno Setup*' -and $_.InstallLocation } |
+            ForEach-Object { $isccCandidates += Join-Path $_.InstallLocation 'ISCC.exe' }
+    }
+
+    $iscc = $isccCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
     if (-not $iscc) { $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source }
 
