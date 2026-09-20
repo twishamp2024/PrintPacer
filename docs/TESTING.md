@@ -185,6 +185,59 @@ The application was killed mid-job and restarted. Recovery found the unfinished
 job, reported that a batch had been interrupted, and left it for the user with
 both decision buttons — **without submitting anything**.
 
+### The full rehearsal, including a crash
+
+The complete rehearsal from the end of this document, run on the real printer:
+12 pages, 3 per batch, 2 minutes apart, with the application killed mid-run.
+
+```
+printer counter before : 23348
+
+23:18:21  Batch 1 of 4 submitted (Pages 1-3)
+23:20:06  Batch 1 completed        counter advanced by exactly 3
+23:20:06  Resting 2 minutes        next at 23:22
+23:22:07  Batch 2 of 4 submitted (Pages 4-6)
+23:23:50  Batch 2 completed        counter advanced by exactly 3
+23:23:50  Resting 2 minutes        next at 23:25
+
+23:24:14  *** process killed mid-rest, 6 sheets printed ***
+23:24:42  *** reopened ***
+
+23:24:32  Recovered 1 unfinished job; 0 need a decision
+          "Picking up where it left off. No pages will be printed twice."
+          "2 of 4 batches done. Will continue with batch 3 (Pages 7-9)."
+          Countdown showed 1 min 07 s  -> original 23:25:50 deadline intact
+
+23:25:51  Batch 3 of 4 submitted (Pages 7-9)
+23:27:34  Batch 3 completed        counter advanced by exactly 3
+23:29:35  Batch 4 of 4 submitted (Pages 10-12)
+23:31:18  Batch 4 completed        counter advanced by exactly 3
+23:31:18  Job complete: all 12 pages printed
+
+printer counter after  : 23360   (+12, exactly as expected)
+jams / mispicks         : 0 / 0
+jobs left in queue      : 0
+```
+
+Four distinct spooler jobs, each with a unique document token and a
+non-overlapping range:
+
+```
+rehearsal [1-3]    PrintPacer#bc946dc0.1.1.425f9d28d218
+rehearsal [4-6]    PrintPacer#bc946dc0.2.1.16c96b183aed
+rehearsal [7-9]    PrintPacer#bc946dc0.3.1.2a0ebca1f130
+rehearsal [10-12]  PrintPacer#bc946dc0.4.1.ae6b141141d7
+```
+
+The two results that matter most:
+
+- **The printer's own counter moved by exactly 12.** Not 15, which is what a
+  duplicated batch would have produced; not 9, which is what a dropped one
+  would have. The crash cost nothing and repeated nothing.
+- **The rest period survived the crash.** Batch 3 was due at 23:25:50 and was
+  submitted at 23:25:51 — the application was not even running for part of that
+  window. Absolute deadlines, not countdowns.
+
 ### Device probe
 
 Against the real printer, confirming both channels work and produce the counters

@@ -68,4 +68,11 @@ public sealed record RecoveryReport(
 {
     public static RecoveryReport Clean(PrintJob job, string summary) =>
         new(job.Id, job.FileName, false, summary, Array.Empty<string>());
+
+    /// <summary>
+    /// Read out by screen readers for the row as a whole. A record's generated ToString
+    /// would announce the type name and every field, including the internal job id, which
+    /// tells the listener nothing useful.
+    /// </summary>
+    public override string ToString() => $"{FileName}. {Summary}";
 }
