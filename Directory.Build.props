@@ -1,0 +1,24 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsAsErrors>CS4014;CS1998</WarningsAsErrors>
+    <!--
+      PlatformTarget alone pins the build to x64, which is required because the PDFium
+      native library and the spooler interop are 64-bit. Declaring <Platforms>x64</Platforms>
+      as well would make a solution build emit to bin\x64\Debug while a project build emits
+      to bin\Debug, leaving two output trees and an easy way to run a stale binary.
+    -->
+    <PlatformTarget>x64</PlatformTarget>
+    <Product>PrintPacer</Product>
+    <Company>PrintPacer</Company>
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <Copyright>Local-only utility. No telemetry.</Copyright>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>PrintPacer.App</RootNamespace>
+    <AssemblyName>PrintPacer</AssemblyName>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>Assets\printpacer.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- The app is WPF-first; DPI awareness is declared in app.manifest, which is the
+         correct place for it. Silence the Windows Forms analyser that assumes otherwise. -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+    <AssemblyTitle>PrintPacer</AssemblyTitle>
+    <Description>Scheduled PDF batch printing for Windows</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PrintPacer.Core\PrintPacer.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\printpacer.ico" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,52 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{5C6ACDA0-D01B-43C0-9E87-0ACD252774E2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrintPacer.Core", "src\PrintPacer.Core\PrintPacer.Core.csproj", "{EB683D8C-AE67-4490-A4DD-DD83E18191E7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrintPacer.App", "src\PrintPacer.App\PrintPacer.App.csproj", "{01A62AF5-B762-435D-88B1-607B4A0BD667}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{8AEED1AD-0DD1-4055-8C67-8D6CE0858E2B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrintPacer.Tests", "tests\PrintPacer.Tests\PrintPacer.Tests.csproj", "{68B0CE12-19ED-40AE-92C8-52231E24611C}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{C688F47A-193A-4FBE-BF55-6937DCF481CC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PrintPacer.Probe", "tools\PrintPacer.Probe\PrintPacer.Probe.csproj", "{32E6C91D-613A-4073-BC73-4493B73B8D8E}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EB683D8C-AE67-4490-A4DD-DD83E18191E7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EB683D8C-AE67-4490-A4DD-DD83E18191E7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EB683D8C-AE67-4490-A4DD-DD83E18191E7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EB683D8C-AE67-4490-A4DD-DD83E18191E7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{01A62AF5-B762-435D-88B1-607B4A0BD667}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{01A62AF5-B762-435D-88B1-607B4A0BD667}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{01A62AF5-B762-435D-88B1-607B4A0BD667}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{01A62AF5-B762-435D-88B1-607B4A0BD667}.Release|Any CPU.Build.0 = Release|Any CPU
+		{68B0CE12-19ED-40AE-92C8-52231E24611C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{68B0CE12-19ED-40AE-92C8-52231E24611C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{68B0CE12-19ED-40AE-92C8-52231E24611C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{68B0CE12-19ED-40AE-92C8-52231E24611C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{32E6C91D-613A-4073-BC73-4493B73B8D8E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{32E6C91D-613A-4073-BC73-4493B73B8D8E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{32E6C91D-613A-4073-BC73-4493B73B8D8E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{32E6C91D-613A-4073-BC73-4493B73B8D8E}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{EB683D8C-AE67-4490-A4DD-DD83E18191E7} = {5C6ACDA0-D01B-43C0-9E87-0ACD252774E2}
+		{01A62AF5-B762-435D-88B1-607B4A0BD667} = {5C6ACDA0-D01B-43C0-9E87-0ACD252774E2}
+		{68B0CE12-19ED-40AE-92C8-52231E24611C} = {8AEED1AD-0DD1-4055-8C67-8D6CE0858E2B}
+		{32E6C91D-613A-4073-BC73-4493B73B8D8E} = {C688F47A-193A-4FBE-BF55-6937DCF481CC}
+	EndGlobalSection
+EndGlobal

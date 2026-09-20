@@ -1,0 +1,25 @@
+# ---- .NET build output -------------------------------------------------
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+publish/
+*.user
+*.suo
+*.binlog
+
+# ---- IDE ---------------------------------------------------------------
+.vs/
+.idea/
+*.DotSettings.user
+
+# ---- Test fixtures -----------------------------------------------------
+# Regenerated on demand with:
+#     PrintPacer.Probe makepdfs tests/fixtures
+# The automated tests build their own fixtures in a temporary directory, so
+# nothing here needs to be checked in.
+tests/fixtures/
+
+# ---- Installer output --------------------------------------------------
+installer/output/
