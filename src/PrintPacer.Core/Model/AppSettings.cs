@@ -13,6 +13,11 @@ public sealed class AppSettings
     public int RenderDpi { get; set; } = 300;
     public bool Grayscale { get; set; }
 
+    // ---- Invoice (remembered from the last job's setup screen) ----------------
+    public bool PrintInvoice { get; set; }
+    public decimal BlackWhitePagePrice { get; set; }
+    public decimal ColourPagePrice { get; set; }
+
     // ---- Monitoring ---------------------------------------------------------
     /// <summary>
     /// How often the Windows print queue is polled while a batch is in flight. Cheap, so

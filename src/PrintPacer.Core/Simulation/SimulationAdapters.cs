@@ -247,3 +247,32 @@ public sealed class RecordingPowerManager : IPowerManager
         ReleaseCount++;
     }
 }
+
+/// <summary>Records every invoice it is asked to print, and can be told to refuse.</summary>
+public sealed class SimulatedInvoicePrinter : IInvoicePrinter
+{
+    private readonly List<Billing.Invoice> _printed = new();
+
+    /// <summary>When set, every request fails before anything is sent.</summary>
+    public bool Fail { get; set; }
+
+    /// <summary>When set, requests are accepted but never finish, as if we stopped mid-send.</summary>
+    public bool Hold { get; set; }
+
+    /// <summary>Every invoice handed over, whether or not it finished.</summary>
+    public IReadOnlyList<Billing.Invoice> Printed
+    {
+        get { lock (_printed) return _printed.ToList(); }
+    }
+
+    public Task<PrintResult> PrintAsync(Billing.Invoice invoice, string printerName, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (Fail) return Task.FromResult(PrintResult.Failure("Simulated invoice failure.", now, beforeAnyOutput: true));
+
+        lock (_printed) _printed.Add(invoice);
+        if (Hold) return new TaskCompletionSource<PrintResult>().Task;
+
+        return Task.FromResult(new PrintResult { Spooled = true, PagesRendered = 1, StartedUtc = now, FinishedUtc = now });
+    }
+}

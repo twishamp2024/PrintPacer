@@ -104,7 +104,7 @@ public partial class App : Application
 
         _engine = new JobEngine(
             _store, spooler, new PdfiumPrintEngine(), _probes, settings,
-            SystemClock.Instance, _tray, _power);
+            SystemClock.Instance, _tray, _power, invoicePrinter: new InvoicePrintEngine());
 
         _engine.RecoveryCompleted += OnRecoveryCompleted;
 

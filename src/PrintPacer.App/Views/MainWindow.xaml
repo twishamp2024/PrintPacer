@@ -160,6 +160,59 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- Invoice -->
+                    <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                        <StackPanel>
+                            <CheckBox Content="Print an invoice when the job finishes" Style="{StaticResource Check}"
+                                      Margin="0" IsChecked="{Binding PrintInvoice, Mode=TwoWay}" />
+
+                            <StackPanel Visibility="{Binding PrintInvoice, Converter={StaticResource Show}}">
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220" />
+                                        <ColumnDefinition Width="18" />
+                                        <ColumnDefinition Width="220" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="PRICE PER BLACK &amp; WHITE PAGE" Style="{StaticResource FieldLabel}" />
+                                        <Grid>
+                                            <TextBox Style="{StaticResource Field}" Height="38"
+                                                     AutomationProperties.Name="Price per black and white page"
+                                                     Text="{Binding BlackWhitePrice, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBlock Text="{Binding CurrencySymbol}" Style="{StaticResource Secondary}"
+                                                       FontSize="12" VerticalAlignment="Center"
+                                                       HorizontalAlignment="Right" Margin="0,0,12,0" />
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="PRICE PER COLOUR PAGE" Style="{StaticResource FieldLabel}" />
+                                        <Grid>
+                                            <TextBox Style="{StaticResource Field}" Height="38"
+                                                     AutomationProperties.Name="Price per colour page"
+                                                     Text="{Binding ColourPrice, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBlock Text="{Binding CurrencySymbol}" Style="{StaticResource Secondary}"
+                                                       FontSize="12" VerticalAlignment="Center"
+                                                       HorizontalAlignment="Right" Margin="0,0,12,0" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock Text="Each page is checked for colour automatically, and charged at the matching rate."
+                                           Style="{StaticResource Secondary}" FontSize="12" Margin="2,10,0,0" />
+
+                                <Border Margin="0,12,0,0" CornerRadius="8" Padding="14,11"
+                                        Background="{StaticResource SurfaceMuted}">
+                                    <TextBlock Text="{Binding InvoiceEstimate}" Style="{StaticResource Mono}"
+                                               Foreground="{StaticResource TextPrimary}" LineHeight="21"
+                                               TextWrapping="Wrap" />
+                                </Border>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
                     <!-- Schedule preview -->
                     <Border Style="{StaticResource Card}" Margin="0,16,0,0"
                             Background="{StaticResource SurfaceMuted}">
@@ -267,6 +320,25 @@
 
                             <TextBlock Text="{Binding PauseExplanation}" Style="{StaticResource Secondary}"
                                        FontSize="12" Margin="2,12,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Invoice -->
+                    <Border Style="{StaticResource Card}" Margin="0,16,0,0"
+                            Visibility="{Binding ShowInvoice, Converter={StaticResource Show}}">
+                        <StackPanel>
+                            <Grid>
+                                <TextBlock Text="INVOICE" Style="{StaticResource FieldLabel}" />
+                                <Button Content="{Binding PrintInvoiceLabel}" Style="{StaticResource SecondaryButton}"
+                                        HorizontalAlignment="Right" VerticalAlignment="Top" Padding="12,6"
+                                        FontSize="12.5"
+                                        Command="{Binding PrintInvoiceCommand}"
+                                        Visibility="{Binding CanPrintInvoice, Converter={StaticResource Show}}" />
+                            </Grid>
+                            <TextBlock Text="{Binding InvoiceCharges}" Style="{StaticResource Mono}"
+                                       Foreground="{StaticResource TextPrimary}" LineHeight="21" Margin="0,4,0,0" />
+                            <TextBlock Text="{Binding InvoiceStatus}" Style="{StaticResource Secondary}"
+                                       FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
 

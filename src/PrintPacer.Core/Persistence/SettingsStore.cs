@@ -91,6 +91,8 @@ public sealed class SettingsStore
         s.BlockedGiveUpMinutes = Math.Clamp(s.BlockedGiveUpMinutes, 0, 7 * 24 * 60);
         s.StallTimeoutMinutes = Math.Clamp(s.StallTimeoutMinutes, 2, 24 * 60);
         s.LogRetentionDays = Math.Clamp(s.LogRetentionDays, 1, 365);
+        s.BlackWhitePagePrice = Math.Clamp(s.BlackWhitePagePrice, 0m, 1_000_000m);
+        s.ColourPagePrice = Math.Clamp(s.ColourPagePrice, 0m, 1_000_000m);
         return s;
     }
 

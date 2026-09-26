@@ -1,10 +1,12 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using PrintPacer.Core.Billing;
 using PrintPacer.Core.Device;
 using PrintPacer.Core.Diagnostics;
 using PrintPacer.Core.Engine;
@@ -52,6 +54,9 @@ public sealed class MainViewModel : ObservableObject
 
         _pagesPerBatch = settings.DefaultPagesPerBatch.ToString();
         _delayMinutes = settings.DefaultDelayMinutes.ToString();
+        _printInvoice = settings.PrintInvoice;
+        _blackWhitePrice = FormatPrice(settings.BlackWhitePagePrice);
+        _colourPrice = FormatPrice(settings.ColourPagePrice);
 
         BrowseCommand = new RelayCommand(Browse);
         StartCommand = new RelayCommand(Start, () => CanStart);
@@ -66,6 +71,7 @@ public sealed class MainViewModel : ObservableObject
         ExportLogCommand = new RelayCommand(ExportLog);
         RefreshPrintersCommand = new RelayCommand(RefreshPrinters);
         CancelQueuedBatchCommand = new RelayCommand(() => WithJob(j => _engine.CancelCurrentSpoolerJob(j.Id)));
+        PrintInvoiceCommand = new RelayCommand(PrintInvoiceNow);
 
         ConfirmPrintedCommand = new RelayCommand(p => WithJob(j =>
         {
@@ -122,6 +128,7 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand ResumeFromCommand { get; }
     public RelayCommand RetryBatchCommand { get; }
     public RelayCommand CancelQueuedBatchCommand { get; }
+    public RelayCommand PrintInvoiceCommand { get; }
 
     // ---- Setup screen --------------------------------------------------------
 
@@ -160,6 +167,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 Raise(name);
             }
+            RestartColourCheck();
             RefreshCanStart();
         }
     }
@@ -262,6 +270,181 @@ public sealed class MainViewModel : ObservableObject
             return string.Join(Environment.NewLine, lines);
         }
     }
+
+    // ---- Invoice (setup) --------------------------------------------------------
+
+    private bool _printInvoice;
+    public bool PrintInvoice
+    {
+        get => _printInvoice;
+        set
+        {
+            if (!Set(ref _printInvoice, value)) return;
+            RestartColourCheck();
+            Raise(nameof(InvoiceEstimate));
+            RefreshCanStart();
+        }
+    }
+
+    private string _blackWhitePrice;
+    public string BlackWhitePrice
+    {
+        get => _blackWhitePrice;
+        set { if (Set(ref _blackWhitePrice, value)) { Raise(nameof(InvoiceEstimate)); RefreshCanStart(); } }
+    }
+
+    private string _colourPrice;
+    public string ColourPrice
+    {
+        get => _colourPrice;
+        set { if (Set(ref _colourPrice, value)) { Raise(nameof(InvoiceEstimate)); RefreshCanStart(); } }
+    }
+
+    public string CurrencySymbol => CultureInfo.CurrentCulture.NumberFormat.CurrencySymbol;
+
+    /// <summary>
+    /// Colour classification of the loaded document, one character per page, or null until
+    /// the background check has finished. Belongs to exactly one <see cref="Document"/>.
+    /// </summary>
+    private string? _colourMap;
+    private string? _colourProblem;
+    private int _pagesChecked;
+    private CancellationTokenSource? _colourCheck;
+
+    /// <summary>What the invoice will charge if every page prints, shown before anything is committed.</summary>
+    public string InvoiceEstimate
+    {
+        get
+        {
+            if (Document is null) return "Add a PDF to see what the invoice will charge.";
+            if (!TryReadPrices(out var blackWhite, out var colour, out var problem)) return problem!;
+
+            var colourPages = 0;
+            if (!Settings.Grayscale)
+            {
+                if (_colourMap is null)
+                    return _colourProblem ?? $"Checking which pages use colour…  {_pagesChecked} of {Document.PageCount}";
+                colourPages = _colourMap.Count(c => c == PageColourMap.Colour);
+            }
+
+            var blackWhitePages = Document.PageCount - colourPages;
+            var lines = new List<string>
+            {
+                $"Black & white  {blackWhitePages,6} × {Money(blackWhite),10}  = {Money(blackWhitePages * blackWhite),12}",
+                $"Colour         {colourPages,6} × {Money(colour),10}  = {Money(colourPages * colour),12}",
+                $"Total{"",31}{Money(blackWhitePages * blackWhite + colourPages * colour),12}",
+            };
+
+            if (Settings.Grayscale)
+            {
+                lines.Add("");
+                lines.Add("Greyscale printing is on in Settings, so every page is charged as black & white.");
+            }
+            else if (colourPages > 0)
+            {
+                var pages = Enumerable.Range(1, Document.PageCount)
+                    .Where(p => PageColourMap.IsColour(_colourMap!, p)).ToList();
+                lines.Add("");
+                lines.Add($"Colour pages: {PageColourMap.Shorten(PageColourMap.DescribeRanges(pages), 160)}");
+            }
+
+            return string.Join(Environment.NewLine, lines);
+        }
+    }
+
+    /// <summary>
+    /// Works out which pages carry colour, in the background, as soon as it is needed:
+    /// a PDF is loaded with the invoice ticked. A few hundred pages take a few seconds; the
+    /// estimate shows progress, and Start waits for the answer rather than guessing.
+    /// </summary>
+    private void RestartColourCheck()
+    {
+        _colourCheck?.Cancel();
+        _colourCheck = null;
+        _colourMap = null;
+        _colourProblem = null;
+        _pagesChecked = 0;
+
+        if (!PrintInvoice || Document is null || Settings.Grayscale) return;
+
+        var document = Document;
+        var check = new CancellationTokenSource();
+        _colourCheck = check;
+
+        // Created here, on the UI thread, so its reports arrive back on the UI thread.
+        var progress = new Progress<int>(done =>
+        {
+            if (_colourCheck != check) return;
+            _pagesChecked = done;
+            Raise(nameof(InvoiceEstimate));
+        });
+
+        _ = RunColourCheckAsync(document, check, progress);
+    }
+
+    private async Task RunColourCheckAsync(PdfDocumentInfo document, CancellationTokenSource check, IProgress<int> progress)
+    {
+        try
+        {
+            var pages = await Task.Run(() => PageColourAnalyzer.Analyse(document.Path, progress, check.Token));
+            if (_colourCheck != check) return;
+
+            _colourMap = PageColourMap.Encode(pages);
+            Log.Information("Colour check of {File}: {Colour} of {Pages} pages use colour",
+                document.FileName, pages.Count(p => p), pages.Length);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            if (_colourCheck != check) return;
+            _colourProblem = "The pages could not be checked for colour, so the invoice cannot be priced. " +
+                             "Untick “Print an invoice” to print without one.";
+            Log.Warning(ex, "Colour check failed for {File}", document.FileName);
+        }
+        finally
+        {
+            if (_colourCheck == check) _colourCheck = null;
+            check.Dispose();
+        }
+
+        Raise(nameof(InvoiceEstimate));
+        RefreshCanStart();
+    }
+
+    private bool TryReadPrices(out decimal blackWhite, out decimal colour, out string? problem)
+    {
+        colour = 0;
+        problem = null;
+
+        if (!TryReadPrice(BlackWhitePrice, out blackWhite))
+        {
+            problem = "Enter the price of a black & white page, for example 2 or 2.50.";
+            return false;
+        }
+
+        if (!TryReadPrice(ColourPrice, out colour))
+        {
+            problem = "Enter the price of a colour page, for example 10 or 12.50.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryReadPrice(string text, out decimal value)
+    {
+        var parsed =
+            decimal.TryParse(text, NumberStyles.Currency, CultureInfo.CurrentCulture, out value) ||
+            decimal.TryParse(text, NumberStyles.Currency, CultureInfo.InvariantCulture, out value);
+        return parsed && value >= 0 && value <= 1_000_000m;
+    }
+
+    private static string FormatPrice(decimal value) => value.ToString("0.##", CultureInfo.CurrentCulture);
+
+    private static string Money(decimal value) => value.ToString("C", CultureInfo.CurrentCulture);
 
     private bool _canStart;
     public bool CanStart
@@ -399,6 +582,61 @@ public sealed class MainViewModel : ObservableObject
           "Use “Cancel queued batch” if you need to stop that too."
         : "Pause stops the next batch from being sent. Nothing is currently in the printer's queue.";
 
+    // ---- Invoice (dashboard) -------------------------------------------------------
+
+    public bool ShowInvoice => _job?.WantsInvoice == true;
+
+    public string InvoiceStatus => _job?.InvoiceState switch
+    {
+        InvoiceState.Waiting when _job.IsTerminal =>
+            "Not printed, because the job did not finish. You can still print it for the pages that came out.",
+        InvoiceState.Waiting => "Prints automatically after the last batch.",
+        InvoiceState.Sending => "Printing the invoice…",
+        InvoiceState.Printed => $"Printed at {_job.InvoicePrintedUtc?.ToLocalTime():HH:mm}.",
+        InvoiceState.Failed => "The printer did not accept the invoice, so nothing printed. You can send it again.",
+        InvoiceState.Interrupted =>
+            "PrintPacer stopped while sending the invoice. Check the printer's tray before printing it again.",
+        _ => "",
+    };
+
+    public string InvoiceCharges
+    {
+        get
+        {
+            if (_job?.Invoice is not { } invoice) return "";
+            return string.Join(Environment.NewLine,
+                $"Black & white  {invoice.BlackWhitePages,6} × {Money(invoice.BlackWhitePagePrice),10}  = {Money(invoice.BlackWhiteAmount),12}",
+                $"Colour         {invoice.ColourPages,6} × {Money(invoice.ColourPagePrice),10}  = {Money(invoice.ColourAmount),12}",
+                $"{(_job.IsTerminal ? "Total" : "Total so far"),-36}{Money(invoice.Total),12}");
+        }
+    }
+
+    public bool CanPrintInvoice => _job is { IsTerminal: true, WantsInvoice: true } &&
+                                   _job.InvoiceState != InvoiceState.Sending;
+
+    public string PrintInvoiceLabel => _job?.InvoiceState is InvoiceState.Printed or InvoiceState.Interrupted
+        ? "Print invoice again"
+        : "Print invoice";
+
+    private void PrintInvoiceNow()
+    {
+        if (_job is not { } job || !CanPrintInvoice) return;
+
+        // A second copy of a bill is harmless but still worth a moment's thought, and after an
+        // interruption the first one may well be sitting in the tray.
+        if (job.InvoiceState is InvoiceState.Printed or InvoiceState.Interrupted)
+        {
+            var answer = MessageBox.Show(
+                job.InvoiceState == InvoiceState.Printed
+                    ? "The invoice has already printed. Print another copy?"
+                    : "The invoice may already have printed. Please check the printer's tray.\n\nPrint it now?",
+                "Print invoice", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+
+        _engine.PrintInvoice(job.Id);
+    }
+
     // ---- Printer status strip ---------------------------------------------------
 
     private string _printerStatus = "Checking…";
@@ -479,17 +717,31 @@ public sealed class MainViewModel : ObservableObject
         var start = ResolveStart(out var problem);
         if (problem is not null) { SetupProblem = problem; return; }
 
+        InvoiceRequest? invoice = null;
+        if (PrintInvoice)
+        {
+            if (!TryReadPrices(out var blackWhite, out var colour, out _)) return;
+            if (!Settings.Grayscale && _colourMap is null) return;
+            invoice = new InvoiceRequest(blackWhite, colour, _colourMap);
+        }
+
         try
         {
             var job = await _engine.CreateJobAsync(
                 Document, SelectedPrinter, perBatch, delay,
                 StartLater ? StartMode.AtTime : StartMode.Immediately,
                 start?.ToUniversalTime(),
-                Settings.RenderDpi, Settings.Grayscale);
+                Settings.RenderDpi, Settings.Grayscale, invoice);
 
             Settings.DefaultPagesPerBatch = perBatch;
             Settings.DefaultDelayMinutes = delay;
             Settings.LastPrinterName = SelectedPrinter;
+            Settings.PrintInvoice = PrintInvoice;
+            if (invoice is not null)
+            {
+                Settings.BlackWhitePagePrice = invoice.BlackWhitePagePrice;
+                Settings.ColourPagePrice = invoice.ColourPagePrice;
+            }
             _settingsStore.Save(Settings);
 
             _engine.StartJob(job.Id);
@@ -652,6 +904,8 @@ public sealed class MainViewModel : ObservableObject
                      nameof(StateHeadline), nameof(StateDetail), nameof(StateForeground), nameof(StateBackground),
                      nameof(CurrentBatchText), nameof(NextBatchText), nameof(CanPause), nameof(CanResume),
                      nameof(CanCancel), nameof(IsFinished), nameof(IsPrintingNow), nameof(PauseExplanation),
+                     nameof(ShowInvoice), nameof(InvoiceStatus), nameof(InvoiceCharges),
+                     nameof(CanPrintInvoice), nameof(PrintInvoiceLabel),
                  })
         {
             Raise(name);
@@ -820,6 +1074,15 @@ public sealed class MainViewModel : ObservableObject
         ResolveStart(out var startProblem);
         if (startProblem is not null) { CanStart = false; SetupProblem = startProblem; return; }
 
+        if (PrintInvoice)
+        {
+            if (!TryReadPrices(out _, out _, out var priceProblem)) { CanStart = false; SetupProblem = priceProblem; return; }
+
+            // Still checking pages for colour: the estimate shows progress, so there is no
+            // problem to report, but the job cannot be priced until the check is done.
+            if (!Settings.Grayscale && _colourMap is null) { CanStart = false; SetupProblem = _colourProblem; return; }
+        }
+
         SetupProblem = null;
         CanStart = true;
     }
@@ -906,6 +1169,11 @@ public sealed class MainViewModel : ObservableObject
         _engine.UpdateSettings(settings);
         _probes.InvalidateAll();
         _lastDeviceProbe = DateTimeOffset.MinValue;
+
+        // Greyscale decides whether colour matters to the bill at all.
+        if (_colourMap is null && _colourCheck is null) RestartColourCheck();
+        Raise(nameof(InvoiceEstimate));
+        RefreshCanStart();
     }
 
     public void Stop() => _ticker.Stop();

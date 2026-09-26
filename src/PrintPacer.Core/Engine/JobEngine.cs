@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using PrintPacer.Core.Billing;
 using PrintPacer.Core.Device;
 using PrintPacer.Core.Model;
 using PrintPacer.Core.Pdf;
@@ -44,6 +45,7 @@ public sealed class JobEngine : IAsyncDisposable
     private readonly ISystemClock _clock;
     private readonly INotifier _notifier;
     private readonly IPowerManager _power;
+    private readonly IInvoicePrinter _invoicePrinter;
 
     private readonly Channel<Func<CancellationToken, Task>> _commands =
         Channel.CreateUnbounded<Func<CancellationToken, Task>>(new UnboundedChannelOptions { SingleReader = true });
@@ -68,7 +70,8 @@ public sealed class JobEngine : IAsyncDisposable
         ISystemClock? clock = null,
         INotifier? notifier = null,
         IPowerManager? power = null,
-        TimeSpan? tickInterval = null)
+        TimeSpan? tickInterval = null,
+        IInvoicePrinter? invoicePrinter = null)
     {
         _store = store;
         _spooler = spooler;
@@ -79,6 +82,7 @@ public sealed class JobEngine : IAsyncDisposable
         _notifier = notifier ?? NullNotifier.Instance;
         _power = power ?? NullPowerManager.Instance;
         _tickInterval = tickInterval ?? DefaultTickInterval;
+        _invoicePrinter = invoicePrinter ?? NullInvoicePrinter.Instance;
     }
 
     // ---- Public surface ----------------------------------------------------
@@ -141,8 +145,19 @@ public sealed class JobEngine : IAsyncDisposable
 
     public Task<JobSnapshot> CreateJobAsync(PdfDocumentInfo document, string printerName,
         int pagesPerBatch, int delayMinutes, StartMode startMode, DateTimeOffset? startAtUtc,
-        int renderDpi, bool grayscale)
+        int renderDpi, bool grayscale, InvoiceRequest? invoice = null)
     {
+        if (invoice is not null)
+        {
+            if (invoice.BlackWhitePagePrice < 0 || invoice.ColourPagePrice < 0)
+                throw new ArgumentOutOfRangeException(nameof(invoice), "Page prices cannot be negative.");
+
+            // Without a colour map the bill could only guess, and a guessed bill is a wrong
+            // one. Greyscale is the exception: every page is black and white regardless.
+            if (!grayscale && !PageColourMap.IsValid(invoice.PageColourMap, document.PageCount))
+                throw new ArgumentException("The invoice needs the colour of every page.", nameof(invoice));
+        }
+
         var completion = new TaskCompletionSource<JobSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         Post(_ =>
@@ -170,6 +185,10 @@ public sealed class JobEngine : IAsyncDisposable
                 ScheduledStartUtc = startMode == StartMode.AtTime ? startAtUtc : null,
                 RenderDpi = renderDpi,
                 Grayscale = grayscale,
+                InvoiceState = invoice is null ? InvoiceState.NotRequested : InvoiceState.Waiting,
+                BlackWhitePagePrice = invoice?.BlackWhitePagePrice ?? 0m,
+                ColourPagePrice = invoice?.ColourPagePrice ?? 0m,
+                PageColourMap = invoice?.PageColourMap,
                 CreatedUtc = now,
                 UpdatedUtc = now,
                 State = JobState.Draft,
@@ -184,6 +203,15 @@ public sealed class JobEngine : IAsyncDisposable
             Record(job, "Information", "Job", $"Job created for {job.FileName}",
                 $"{job.TotalPages} pages, {job.BatchCount} batches of up to {job.PagesPerBatch}, " +
                 $"{job.DelayMinutes} min between batches, printer \"{job.PrinterName}\".");
+
+            if (job.WantsInvoice)
+            {
+                var colourPages = job.Grayscale ? 0 : job.PageColourMap!.Count(c => c == PageColourMap.Colour);
+                Record(job, "Information", "Invoice", "An invoice will print when the job finishes.",
+                    $"{job.TotalPages - colourPages} black & white page(s) at {job.BlackWhitePagePrice}, " +
+                    $"{colourPages} colour page(s) at {job.ColourPagePrice}" +
+                    (job.Grayscale ? " (printing in greyscale, so none are charged as colour)." : "."));
+            }
 
             Notify(job);
             completion.TrySetResult(JobSnapshot.From(job));
@@ -469,6 +497,17 @@ public sealed class JobEngine : IAsyncDisposable
                     lines.Add($"Finished      : {finished.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
                 if (job.AttentionReason is { Length: > 0 } attention)
                     lines.Add($"Needs action  : {attention}");
+
+                if (job.WantsInvoice)
+                {
+                    var invoice = Invoice.For(job, _clock.UtcNow);
+                    lines.Add($"Invoice       : {invoice.Number}, {job.InvoiceState}" +
+                              (job.InvoicePrintedUtc is { } printed ? $" at {printed.ToLocalTime():yyyy-MM-dd HH:mm:ss}" : ""));
+                    lines.Add($"  B&W pages   : {invoice.BlackWhitePages} x {invoice.BlackWhitePagePrice} = {invoice.BlackWhiteAmount}");
+                    lines.Add($"  Colour pages: {invoice.ColourPages} x {invoice.ColourPagePrice} = {invoice.ColourAmount}" +
+                              (invoice.ColourPageRanges.Length > 0 ? $"  ({invoice.ColourPageRanges})" : ""));
+                    lines.Add($"  Total       : {invoice.Total}");
+                }
 
                 lines.Add("");
                 lines.Add("Batches");
@@ -1107,7 +1146,91 @@ public sealed class JobEngine : IAsyncDisposable
                 $"All {pages} pages of {job.FileName} have been printed.", job);
         }
 
+        if (job.InvoiceState == InvoiceState.Waiting) BeginInvoicePrint(job);
+
         ReleasePowerIfIdle();
+    }
+
+    // ---- Invoice -------------------------------------------------------------
+
+    /// <summary>
+    /// Prints the invoice for a finished job on request: to reprint one, to retry one the
+    /// printer refused, or to bill for the pages of a job that was cancelled part-way.
+    /// </summary>
+    public void PrintInvoice(string jobId) => Post(_ =>
+    {
+        var job = Find(jobId);
+        if (job is { IsTerminal: true, WantsInvoice: true } && job.InvoiceState != InvoiceState.Sending)
+            BeginInvoicePrint(job);
+        return Task.CompletedTask;
+    });
+
+    /// <summary>
+    /// Sends the invoice as its own one-page print job, after the last batch has been
+    /// verified, so it can never be mistaken for part of a batch by the page-counter check.
+    /// </summary>
+    private void BeginInvoicePrint(PrintJob job)
+    {
+        var invoice = Invoice.For(job, _clock.UtcNow);
+
+        // Recorded before the printer is asked, for the same reason as a batch's submit
+        // intent: if we stop mid-send, the record says "may have printed", not "not yet".
+        job.InvoiceState = InvoiceState.Sending;
+        _store.UpdateJob(job);
+        Notify(job);
+
+        Record(job, "Information", "Invoice", $"Printing invoice {invoice.Number}.",
+            $"{invoice.BlackWhitePages} black & white, {invoice.ColourPages} colour, total {invoice.Total}.");
+
+        Task<PrintResult> printing;
+        try
+        {
+            printing = _invoicePrinter.PrintAsync(invoice, job.PrinterName, _shutdown.Token);
+        }
+        catch (Exception ex)
+        {
+            printing = Task.FromResult(PrintResult.Failure(ex.Message, _clock.UtcNow, beforeAnyOutput: true));
+        }
+
+        var jobId = job.Id;
+        _ = printing.ContinueWith(
+            finished => Post(_ =>
+            {
+                FinishInvoicePrint(jobId, finished);
+                return Task.CompletedTask;
+            }),
+            CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+    }
+
+    private void FinishInvoicePrint(string jobId, Task<PrintResult> finished)
+    {
+        var job = Find(jobId);
+        if (job is null || job.InvoiceState != InvoiceState.Sending) return;
+
+        var result = finished.IsCompletedSuccessfully
+            ? finished.Result
+            : PrintResult.Failure(finished.Exception?.GetBaseException().Message ?? "The invoice was cancelled.",
+                _clock.UtcNow, beforeAnyOutput: false);
+
+        if (result.Spooled)
+        {
+            job.InvoiceState = InvoiceState.Printed;
+            job.InvoicePrintedUtc = _clock.UtcNow;
+            _store.UpdateJob(job);
+            Record(job, "Information", "Invoice", "Invoice printed.");
+        }
+        else
+        {
+            // A failure before any output means nothing can be in the tray; anything else
+            // might be, and the user is told so rather than having it resent for them.
+            job.InvoiceState = result.FailedBeforeAnyOutput ? InvoiceState.Failed : InvoiceState.Interrupted;
+            _store.UpdateJob(job);
+            Record(job, "Warning", "Invoice", "The invoice could not be printed.", result.Error);
+            NotifyUser(NotificationKind.Warning, "Invoice not printed",
+                $"The invoice for {job.FileName} did not print. Open {AppPaths.ProductName} to print it again.", job);
+        }
+
+        Notify(job);
     }
 
     // ---- Printer readiness ---------------------------------------------------
@@ -1404,6 +1527,9 @@ public sealed class JobEngine : IAsyncDisposable
                 $"Recovered unfinished job for {job.FileName}.", summary);
         }
 
+        // After the loop above, which can itself find that a job finished while we were closed.
+        RecoverInvoices();
+
         if (reports.Count > 0)
         {
             Log.Information("Recovered {Count} unfinished job(s); {Attention} need a decision",
@@ -1411,6 +1537,34 @@ public sealed class JobEngine : IAsyncDisposable
         }
 
         return reports;
+    }
+
+    /// <summary>
+    /// Settles invoices of finished jobs that the last session did not see through.
+    ///
+    /// One caught mid-send may already be in the tray, so it is left for the user to reprint.
+    /// One still waiting was never sent at all - we stopped between finishing the last batch
+    /// and starting the invoice - so it is safe to send now.
+    /// </summary>
+    private void RecoverInvoices()
+    {
+        foreach (var job in _jobs.Where(j => j.State == JobState.Completed))
+        {
+            switch (job.InvoiceState)
+            {
+                case InvoiceState.Sending:
+                    job.InvoiceState = InvoiceState.Interrupted;
+                    _store.UpdateJob(job);
+                    Record(job, "Warning", "Invoice",
+                        $"{AppPaths.ProductName} stopped while the invoice was being sent.",
+                        "Check the printer's tray, and print it again from the job screen if it is not there.");
+                    break;
+
+                case InvoiceState.Waiting:
+                    BeginInvoicePrint(job);
+                    break;
+            }
+        }
     }
 
     /// <summary>

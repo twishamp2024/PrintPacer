@@ -18,7 +18,8 @@ public static class TestPdfBuilder
     private const double PageWidth = 595.276;   // A4 in points
     private const double PageHeight = 841.890;
 
-    public static void Write(string path, int pageCount, string title)
+    /// <param name="colourPages">1-based pages that also carry a solid red block, for the colour check.</param>
+    public static void Write(string path, int pageCount, string title, IReadOnlyCollection<int>? colourPages = null)
     {
         if (pageCount < 1) throw new ArgumentOutOfRangeException(nameof(pageCount));
 
@@ -41,7 +42,7 @@ public static class TestPdfBuilder
 
         for (var page = 1; page <= pageCount; page++)
         {
-            var content = BuildPageContent(page, pageCount, title);
+            var content = BuildPageContent(page, pageCount, title, colourPages?.Contains(page) == true);
             var contentBytes = Latin1(content);
             var streamObject = new List<byte>();
             streamObject.AddRange(Latin1($"<< /Length {contentBytes.Length} >>\nstream\n"));
@@ -60,7 +61,7 @@ public static class TestPdfBuilder
         WritePdf(path, objects, title);
     }
 
-    private static string BuildPageContent(int page, int total, string title)
+    private static string BuildPageContent(int page, int total, string title, bool colour)
     {
         var sb = new StringBuilder();
 
@@ -107,6 +108,9 @@ public static class TestPdfBuilder
         // Corner ticks confirm the whole printable area is reaching the paper.
         foreach (var (x, y) in new[] { (30.0, 30.0), (PageWidth - 60, 30.0), (30.0, PageHeight - 60), (PageWidth - 60, PageHeight - 60) })
             sb.Append(CultureInfo.InvariantCulture, $"0 0 0 rg {F(x)} {F(y)} 30 30 re f\n");
+
+        if (colour)
+            sb.Append(CultureInfo.InvariantCulture, $"0.85 0.1 0.1 rg 60 {F(PageHeight - 200)} 160 80 re f\n");
 
         return sb.ToString();
     }

@@ -1,3 +1,5 @@
+using PrintPacer.Core.Billing;
+
 namespace PrintPacer.Core.Model;
 
 /// <summary>
@@ -40,6 +42,21 @@ public sealed class PrintJob
     public bool Grayscale { get; init; }
     public bool FitToPrintableArea { get; init; } = true;
     public bool AutoRotate { get; init; } = true;
+
+    // ---- Invoice -----------------------------------------------------------
+    public InvoiceState InvoiceState { get; set; } = InvoiceState.NotRequested;
+    public decimal BlackWhitePagePrice { get; init; }
+    public decimal ColourPagePrice { get; init; }
+
+    /// <summary>
+    /// Which pages carry colour, one character per page (see <see cref="Billing.PageColourMap"/>).
+    /// Captured at setup so the bill does not depend on the source file still being there.
+    /// </summary>
+    public string? PageColourMap { get; init; }
+
+    public DateTimeOffset? InvoicePrintedUtc { get; set; }
+
+    public bool WantsInvoice => InvoiceState != InvoiceState.NotRequested;
 
     // ---- Runtime -----------------------------------------------------------
     public JobState State { get; set; } = JobState.Draft;

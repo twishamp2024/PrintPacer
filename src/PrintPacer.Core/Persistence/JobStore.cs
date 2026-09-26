@@ -1,6 +1,7 @@
 using System.Data;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using PrintPacer.Core.Billing;
 using PrintPacer.Core.Model;
 using Serilog;
 
@@ -22,7 +23,7 @@ namespace PrintPacer.Core.Persistence;
 public sealed class JobStore : IDisposable
 {
     private static readonly ILogger Log = Serilog.Log.ForContext<JobStore>();
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
 
     private readonly SqliteConnection _connection;
     private readonly object _gate = new();
@@ -67,10 +68,12 @@ public sealed class JobStore : IDisposable
             var current = QueryScalarLong("SELECT version FROM schema_info LIMIT 1;");
             if (current is null)
             {
+                // A new database is created at v1 and then upgraded like any other, so each
+                // schema version has exactly one definition and the two paths cannot drift.
                 CreateSchema();
-                Execute("INSERT INTO schema_info (version) VALUES ($v);", ("$v", SchemaVersion));
-                Log.Information("Created job database at {Path} (schema v{Version})",
-                    _connection.DataSource, SchemaVersion);
+                Execute("INSERT INTO schema_info (version) VALUES (1);");
+                current = 1;
+                Log.Information("Created job database at {Path}", _connection.DataSource);
             }
             else if (current.Value > SchemaVersion)
             {
@@ -78,7 +81,25 @@ public sealed class JobStore : IDisposable
                     $"The job database was written by a newer version of {AppPaths.ProductName} " +
                     $"(schema v{current}, this build understands v{SchemaVersion}).");
             }
+
+            if (current < 2) UpgradeToV2();
         }
+    }
+
+    /// <summary>v2: per-job invoice settings and the per-page colour classification.</summary>
+    private void UpgradeToV2()
+    {
+        using var transaction = _connection.BeginTransaction();
+        Execute("""
+            ALTER TABLE jobs ADD COLUMN invoice_state       INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE jobs ADD COLUMN bw_page_price       TEXT;
+            ALTER TABLE jobs ADD COLUMN colour_page_price   TEXT;
+            ALTER TABLE jobs ADD COLUMN page_colour_map     TEXT;
+            ALTER TABLE jobs ADD COLUMN invoice_printed_utc TEXT;
+            UPDATE schema_info SET version = 2;
+            """, transaction);
+        transaction.Commit();
+        Log.Information("Job database upgraded to schema v2");
     }
 
     private void CreateSchema()
@@ -195,7 +216,8 @@ public sealed class JobStore : IDisposable
                     render_dpi, grayscale, fit_to_printable, auto_rotate,
                     state, current_batch, next_batch_due_utc,
                     created_utc, updated_utc, started_utc, finished_utc,
-                    last_error, attention_reason, last_printer_status, consecutive_blocked
+                    last_error, attention_reason, last_printer_status, consecutive_blocked,
+                    invoice_state, bw_page_price, colour_page_price, page_colour_map, invoice_printed_utc
                 ) VALUES (
                     $id, $pos, $path, $name, $size, $sha, $pages,
                     $title, $author, $producer, $ver, $enc,
@@ -203,7 +225,8 @@ public sealed class JobStore : IDisposable
                     $dpi, $gray, $fit, $rot,
                     $state, $cur, $due,
                     $created, $updated, $started, $finished,
-                    $err, $att, $pstatus, $blocked
+                    $err, $att, $pstatus, $blocked,
+                    $inv, $bwprice, $colprice, $colmap, $invprinted
                 );
                 """,
                 transaction,
@@ -221,7 +244,10 @@ public sealed class JobStore : IDisposable
                 ("$created", Time(job.CreatedUtc)), ("$updated", Time(job.UpdatedUtc)),
                 ("$started", Time(job.StartedUtc)), ("$finished", Time(job.FinishedUtc)),
                 ("$err", job.LastError), ("$att", job.AttentionReason),
-                ("$pstatus", job.LastPrinterStatus), ("$blocked", (long)job.ConsecutiveBlockedChecks));
+                ("$pstatus", job.LastPrinterStatus), ("$blocked", (long)job.ConsecutiveBlockedChecks),
+                ("$inv", (long)job.InvoiceState), ("$bwprice", Money(job.BlackWhitePagePrice)),
+                ("$colprice", Money(job.ColourPagePrice)), ("$colmap", job.PageColourMap),
+                ("$invprinted", Time(job.InvoicePrintedUtc)));
 
             foreach (var batch in job.Batches)
             {
@@ -254,7 +280,8 @@ public sealed class JobStore : IDisposable
                     scheduled_start_utc = $start,
                     updated_utc = $updated, started_utc = $started, finished_utc = $finished,
                     last_error = $err, attention_reason = $att, last_printer_status = $pstatus,
-                    consecutive_blocked = $blocked
+                    consecutive_blocked = $blocked,
+                    invoice_state = $inv, invoice_printed_utc = $invprinted
                 WHERE id = $id;
                 """,
                 null,
@@ -265,6 +292,7 @@ public sealed class JobStore : IDisposable
                 ("$finished", Time(job.FinishedUtc)),
                 ("$err", job.LastError), ("$att", job.AttentionReason),
                 ("$pstatus", job.LastPrinterStatus), ("$blocked", (long)job.ConsecutiveBlockedChecks),
+                ("$inv", (long)job.InvoiceState), ("$invprinted", Time(job.InvoicePrintedUtc)),
                 ("$id", job.Id));
         }
     }
@@ -556,6 +584,11 @@ public sealed class JobStore : IDisposable
         AttentionReason = GetString(r, "attention_reason"),
         LastPrinterStatus = GetString(r, "last_printer_status"),
         ConsecutiveBlockedChecks = (int)(GetLong(r, "consecutive_blocked") ?? 0),
+        InvoiceState = (InvoiceState)(GetLong(r, "invoice_state") ?? 0),
+        BlackWhitePagePrice = ParseMoney(GetString(r, "bw_page_price")),
+        ColourPagePrice = ParseMoney(GetString(r, "colour_page_price")),
+        PageColourMap = GetString(r, "page_colour_map"),
+        InvoicePrintedUtc = ParseTime(GetString(r, "invoice_printed_utc")),
     };
 
     private static Batch ReadBatch(IDataRecord r) => new()
@@ -625,6 +658,15 @@ public sealed class JobStore : IDisposable
                 DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var parsed)
                 ? parsed
                 : null;
+
+    /// <summary>
+    /// Prices are stored as invariant text: SQLite's REAL is a binary double, and a bill
+    /// that is a fraction of a cent out is still a wrong bill.
+    /// </summary>
+    private static string Money(decimal value) => value.ToString(CultureInfo.InvariantCulture);
+
+    private static decimal ParseMoney(string? value) =>
+        decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0m;
 
     private SqliteCommand Command(string sql, SqliteTransaction? transaction,
         params (string Name, object? Value)[] parameters)

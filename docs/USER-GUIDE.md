@@ -50,7 +50,45 @@ for testing but defeats the purpose in normal use.
 
 Tick **Start later** and give a date and a 24-hour time to begin at, say, 23:30.
 
-### 6. Read "What will happen"
+### 6. Print an invoice (optional)
+
+Tick **Print an invoice when the job finishes** and enter the price of a black &
+white page and of a colour page. Amounts use your Windows region's currency.
+
+PrintPacer checks every page for colour as soon as you tick the box, and shows
+what the bill will come to if every page prints:
+
+```
+Black & white     150 ×      ₹2.00  =      ₹300.00
+Colour             50 ×     ₹10.00  =      ₹500.00
+Total                                      ₹800.00
+
+Colour pages: 151–200
+```
+
+A page counts as colour when it actually puts visible colour on paper — a red
+heading or a photo does; black text that happens to be stored as RGB, or a grey
+scan, does not. If **Render in greyscale** is on in Settings, every page is
+charged at the black & white rate, because that is how it prints.
+
+**START PRINTING** waits until the colour check has finished (a few seconds for
+a few hundred pages). Your prices are remembered for next time.
+
+When the last batch is verified, the invoice prints on the same printer as its
+own one-page job. It charges only pages PrintPacer believes are on paper, and
+lists the invoice number, dates, the black & white and colour page counts, the
+rate and amount for each, the total, and which pages were colour.
+
+The **Invoice** panel on the job screen shows the running total and whether the
+invoice has printed. **Print invoice** appears once the job has ended: use it to
+print another copy, to retry if the printer refused it, or to bill for the
+pages of a job you cancelled part-way.
+
+If PrintPacer stops while the invoice is being sent, it does not resend it by
+itself on the next start — check the tray, and press **Print invoice again** if
+it is not there.
+
+### 7. Read "What will happen"
 
 Before anything is sent, this panel spells out the actual plan:
 
@@ -64,7 +102,7 @@ Before anything is sent, this panel spells out the actual plan:
 
 If that is not what you expected, fix it now.
 
-### 7. Press START PRINTING
+### 8. Press START PRINTING
 
 ---
 

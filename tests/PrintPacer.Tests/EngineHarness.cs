@@ -1,3 +1,4 @@
+using PrintPacer.Core.Billing;
 using PrintPacer.Core.Engine;
 using PrintPacer.Core.Model;
 using PrintPacer.Core.Pdf;
@@ -26,6 +27,7 @@ public sealed class EngineHarness : IAsyncDisposable
     public ManualClock Clock { get; }
     public RecordingNotifier Notifier { get; private set; }
     public RecordingPowerManager Power { get; private set; }
+    public SimulatedInvoicePrinter InvoicePrinter { get; private set; }
 
     public JobStore Store { get; private set; }
     public JobEngine Engine { get; private set; }
@@ -46,18 +48,20 @@ public sealed class EngineHarness : IAsyncDisposable
         Clock = new ManualClock();
         Notifier = new RecordingNotifier();
         Power = new RecordingPowerManager();
+        InvoicePrinter = new SimulatedInvoicePrinter();
 
         Store = new JobStore(Path.Combine(root, "jobs.db"));
         Engine = BuildEngine();
     }
 
-    public static async Task<EngineHarness> CreateAsync(int pages, Action<AppSettings>? configure = null)
+    public static async Task<EngineHarness> CreateAsync(int pages, Action<AppSettings>? configure = null,
+        IReadOnlyCollection<int>? colourPages = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "printpacer-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
 
         var pdfPath = Path.Combine(root, $"fixture-{pages}.pdf");
-        TestPdfBuilder.Write(pdfPath, pages, $"Test fixture {pages}");
+        TestPdfBuilder.Write(pdfPath, pages, $"Test fixture {pages}", colourPages);
 
         var document = new PdfService().Load(pdfPath);
 
@@ -90,7 +94,8 @@ public sealed class EngineHarness : IAsyncDisposable
         Power,
         // A fast tick keeps the tests quick without changing any engine behaviour, because
         // all scheduling decisions are driven by the injected clock rather than by ticks.
-        TimeSpan.FromMilliseconds(5));
+        TimeSpan.FromMilliseconds(5),
+        InvoicePrinter);
 
     /// <summary>
     /// The most recent snapshot the engine published. Tests poll this rather than reaching
@@ -155,6 +160,16 @@ public sealed class EngineHarness : IAsyncDisposable
         StartMode startMode = StartMode.Immediately, DateTimeOffset? startAt = null) =>
         Engine.CreateJobAsync(Document, Printer.Name, pagesPerBatch, delayMinutes,
             startMode, startAt, 300, false);
+
+    /// <summary>A job that should print an invoice at the end, like ticking the box on the setup screen.</summary>
+    public Task<JobSnapshot> CreateJobWithInvoiceAsync(int pagesPerBatch, int delayMinutes,
+        decimal blackWhitePrice, decimal colourPrice, bool grayscale = false)
+    {
+        var map = PageColourMap.Encode(PageColourAnalyzer.Analyse(PdfPath));
+        return Engine.CreateJobAsync(Document, Printer.Name, pagesPerBatch, delayMinutes,
+            StartMode.Immediately, null, 300, grayscale,
+            new InvoiceRequest(blackWhitePrice, colourPrice, map));
+    }
 
     /// <summary>
     /// Waits for a condition while driving the simulated printer forward. Without the

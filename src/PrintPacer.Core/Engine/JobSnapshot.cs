@@ -1,3 +1,4 @@
+using PrintPacer.Core.Billing;
 using PrintPacer.Core.Model;
 
 namespace PrintPacer.Core.Engine;
@@ -94,6 +95,17 @@ public sealed record JobSnapshot
     public string? Title { get; init; }
     public string FileSha256 { get; init; } = "";
 
+    public InvoiceState InvoiceState { get; init; }
+    public DateTimeOffset? InvoicePrintedUtc { get; init; }
+
+    /// <summary>
+    /// The bill as it stands: pages printed so far, charged at the job's rates. Null when the
+    /// user did not ask for an invoice.
+    /// </summary>
+    public Invoice? Invoice { get; init; }
+
+    public bool WantsInvoice => InvoiceState != InvoiceState.NotRequested;
+
     public required IReadOnlyList<BatchSnapshot> Batches { get; init; }
 
     public int BatchCount => Batches.Count;
@@ -136,6 +148,9 @@ public sealed record JobSnapshot
         LastError = job.LastError,
         Title = job.Title,
         FileSha256 = job.FileSha256,
+        InvoiceState = job.InvoiceState,
+        InvoicePrintedUtc = job.InvoicePrintedUtc,
+        Invoice = job.WantsInvoice ? Invoice.For(job, job.FinishedUtc ?? DateTimeOffset.UtcNow) : null,
         Batches = job.Batches.OrderBy(b => b.FirstPage).Select(BatchSnapshot.From).ToList(),
     };
 }
