@@ -283,7 +283,7 @@ public class JobEngineTests
         var job = await h.CreateJobAsync(pagesPerBatch: 50, delayMinutes: 0);
         h.Engine.StartJob(job.Id);
 
-        (await h.WaitForStateAsync(JobState.Completed, 15_000)).Should().BeTrue();
+        (await h.WaitForStateAsync(JobState.Completed, 15_000)).Should().BeTrue(h.Diagnostics());
     }
 
     [Fact]
