@@ -36,7 +36,7 @@ dotnet test tests\PrintPacer.Tests\PrintPacer.Tests.csproj
 ## Results
 
 ```
-Passed!  Failed: 0   Passed: 70   Skipped: 0   Total: 70   Duration: 24 s
+Passed!  Failed: 0   Passed: 100   Skipped: 0   Total: 100   Duration: 26 s
 ```
 
 Verified on .NET 8.0.425, Windows 11 24H2 (build 26200), x64, in both Debug and
@@ -48,6 +48,9 @@ Release, and run repeatedly to confirm no flakiness.
 | `BatchVerifierTests` | 15 | The did-it-print decision table |
 | `JobEngineTests` | 31 | Scheduling, printer faults, stalls, controls |
 | `RecoveryTests` | 11 | Crash, restart, adoption, duplicate avoidance |
+| `InvoiceTests` | 15 | Colour detection, billing, printing the invoice once |
+| `ColourModeTests` | 12 | Print mode on every batch, restarts, old data, uncooperative drivers |
+| `WindowsPrintPathTests` | 3 | Black & white through the real driver and spooler, to a file |
 
 ---
 
@@ -148,6 +151,32 @@ Because the output is rasterised and has no text layer, `verify` reduces every
 page of both files to a grayscale fingerprint and matches each printed page to
 its nearest source page. The separation figure confirms the match is decisive
 rather than a coincidence.
+
+### Black & white on real drivers
+
+`PrintPacer.Probe colour` asks every installed driver whether it keeps
+`DMCOLOR_MONOCHROME`, without printing anything:
+
+```
+HPDA95ED (HP Ink Tank Wireless 410 series)   Honoured
+Microsoft XPS Document Writer                Honoured
+Microsoft Print to PDF                       NotExposed
+Fax                                          MonochromeDevice
+```
+
+Batches were then spooled for real to the virtual printers, writing to a file,
+while the Windows queue was watched. The colour setting Windows stored with each
+job (`JOB_INFO_2.pDevMode`):
+
+```
+XPS Document Writer, black & white   DEVMODE monochrome (every poll)
+XPS Document Writer, colour          DEVMODE colour     (every poll)
+Print to PDF, black & white          DEVMODE colour     - warning raised, pages grey
+```
+
+`WindowsPrintPathTests` repeats this on every test run. The HP Ink Tank itself
+was not sent a black & white job: its driver accepts the setting, but no paper
+was printed to confirm the ink it used.
 
 ### PDFium pixel format
 

@@ -80,9 +80,6 @@
                         </Grid>
                         <TextBlock Text="Higher resolutions take noticeably longer to prepare each page and use much more memory. 300 dpi matches what an inkjet actually puts on plain paper."
                                    Style="{StaticResource Secondary}" FontSize="12" Margin="0,8,0,4" />
-
-                        <CheckBox x:Name="Grayscale" Style="{StaticResource Check}"
-                                  Content="Render in greyscale" />
                     </StackPanel>
                 </Border>
 

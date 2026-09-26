@@ -33,7 +33,7 @@ public enum InvoiceState
 /// <summary>What the user chose on the setup screen, handed to the engine with the job.</summary>
 /// <param name="PageColourMap">
 /// One character per page, <c>'C'</c> for colour and <c>'B'</c> for black and white; see
-/// <see cref="PageColourMap"/>. May be null only when the job prints in greyscale, since
+/// <see cref="PageColourMap"/>. May be null only when the job prints in black and white, since
 /// then every page is black and white whatever it contains.
 /// </param>
 public sealed record InvoiceRequest(decimal BlackWhitePagePrice, decimal ColourPagePrice, string? PageColourMap);
@@ -103,8 +103,8 @@ public sealed record Invoice
     public required decimal BlackWhitePagePrice { get; init; }
     public required decimal ColourPagePrice { get; init; }
 
-    /// <summary>True when the job printed in greyscale, so colour content was charged as black and white.</summary>
-    public bool PrintedInGreyscale { get; init; }
+    /// <summary>True when the job printed in black and white, so colour content was charged as black and white.</summary>
+    public bool PrintedInBlackAndWhite { get; init; }
 
     /// <summary>The colour pages as ranges, e.g. "3, 7–9". Empty when there are none.</summary>
     public string ColourPageRanges { get; init; } = "";
@@ -127,7 +127,7 @@ public sealed record Invoice
             .Order()
             .ToList();
 
-        var colour = job.Grayscale || !PageColourMap.IsValid(job.PageColourMap, job.TotalPages)
+        var colour = job.ColourMode == ColourMode.BlackAndWhite || !PageColourMap.IsValid(job.PageColourMap, job.TotalPages)
             ? new List<int>()
             : printed.Where(p => PageColourMap.IsColour(job.PageColourMap!, p)).ToList();
 
@@ -144,7 +144,7 @@ public sealed record Invoice
             ColourPages = colour.Count,
             BlackWhitePagePrice = job.BlackWhitePagePrice,
             ColourPagePrice = job.ColourPagePrice,
-            PrintedInGreyscale = job.Grayscale,
+            PrintedInBlackAndWhite = job.ColourMode == ColourMode.BlackAndWhite,
             ColourPageRanges = PageColourMap.DescribeRanges(colour),
         };
     }

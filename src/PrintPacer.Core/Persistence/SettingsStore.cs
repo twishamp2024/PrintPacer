@@ -22,6 +22,8 @@ public sealed class SettingsStore
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // Enums as names, so settings.json stays readable and editable by hand.
+        Converters = { new JsonStringEnumConverter() },
     };
 
     private readonly string _path;
@@ -93,6 +95,11 @@ public sealed class SettingsStore
         s.LogRetentionDays = Math.Clamp(s.LogRetentionDays, 1, 365);
         s.BlackWhitePagePrice = Math.Clamp(s.BlackWhitePagePrice, 0m, 1_000_000m);
         s.ColourPagePrice = Math.Clamp(s.ColourPagePrice, 0m, 1_000_000m);
+
+        if (s.LegacyGrayscale == true) s.ColourMode = ColourMode.BlackAndWhite;
+        s.LegacyGrayscale = null;
+        if (!Enum.IsDefined(s.ColourMode)) s.ColourMode = ColourMode.Colour;
+
         return s;
     }
 

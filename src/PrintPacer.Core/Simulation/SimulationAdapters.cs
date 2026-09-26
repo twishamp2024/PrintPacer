@@ -1,5 +1,6 @@
 using PrintPacer.Core.Device;
 using PrintPacer.Core.Engine;
+using PrintPacer.Core.Model;
 using PrintPacer.Core.Printing;
 using PrintPacer.Core.Spooler;
 
@@ -50,6 +51,7 @@ public sealed class SimulatedSpooler : ISpooler
             UserName = "simulation",
             TotalPages = j.TotalPages,
             PagesPrinted = j.PagesPrinted,
+            Monochrome = j.Monochrome,
             Status = MapStatus(j.Status),
             StatusText = j.Status.ToString(),
         }).ToList();
@@ -97,15 +99,28 @@ public sealed class SimulatedPrintEngine : IPrintEngine
     /// <summary>Artificial delay before the job appears, for testing the monitoring loop.</summary>
     public TimeSpan SubmitDelay { get; set; } = TimeSpan.Zero;
 
+    /// <summary>
+    /// Models a driver with no black and white setting: the job carries no colour setting
+    /// and the result says so, as <see cref="PdfiumPrintEngine"/> reports for such a driver.
+    /// </summary>
+    public bool DriverIgnoresMonochrome { get; set; }
+
     public int SubmissionCount { get; private set; }
 
     public List<string> SubmittedTokens { get; } = new();
+
+    /// <summary>Every request exactly as the engine made it, so tests can check what each batch asked for.</summary>
+    public List<PrintRequest> SubmittedRequests { get; } = new();
 
     public async Task<PrintResult> SubmitAsync(PrintRequest request, CancellationToken ct)
     {
         var started = DateTimeOffset.UtcNow;
         SubmissionCount++;
         SubmittedTokens.Add(request.DocumentToken);
+        SubmittedRequests.Add(request);
+
+        var blackAndWhite = request.ColourMode == ColourMode.BlackAndWhite;
+        bool? monochrome = DriverIgnoresMonochrome ? null : blackAndWhite;
 
         if (SubmitDelay > TimeSpan.Zero)
             await Task.Delay(SubmitDelay, ct).ConfigureAwait(false);
@@ -122,16 +137,19 @@ public sealed class SimulatedPrintEngine : IPrintEngine
             // paper may well come out - just not all of it. This is the dangerous case the
             // engine must never resend on its own.
             var partial = Math.Max(1, request.PageCount / 2);
-            _printer.Submit(request.DocumentToken, partial);
+            _printer.Submit(request.DocumentToken, partial, monochrome);
             return PrintResult.Failure("Simulated failure after partial output.", started, beforeAnyOutput: false);
         }
 
-        _printer.Submit(request.DocumentToken, request.PageCount);
+        _printer.Submit(request.DocumentToken, request.PageCount, monochrome);
 
         return new PrintResult
         {
             Spooled = true,
             PagesRendered = request.PageCount,
+            ColourWarning = blackAndWhite && DriverIgnoresMonochrome
+                ? new MonochromeCheck(MonochromeSupport.NotExposed).Warning(request.PrinterName)
+                : null,
             StartedUtc = started,
             FinishedUtc = DateTimeOffset.UtcNow,
         };

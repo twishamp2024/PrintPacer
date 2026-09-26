@@ -74,6 +74,13 @@ public sealed record SpoolerJob
 
     public int TotalPages { get; init; }
     public int PagesPrinted { get; init; }
+
+    /// <summary>
+    /// The colour setting in the job's own DEVMODE, which is what the driver renders with:
+    /// true for black and white, false for colour, null when the job does not carry one.
+    /// </summary>
+    public bool? Monochrome { get; init; }
+
     public int Position { get; init; }
     public long SizeBytes { get; init; }
 

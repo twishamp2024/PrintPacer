@@ -104,7 +104,7 @@ public sealed class SimulatedPrinter
 
     // ---- Queue operations used by the fake spooler and engine ---------------
 
-    public SimulatedJob Submit(string document, int totalPages)
+    public SimulatedJob Submit(string document, int totalPages, bool? monochrome = null)
     {
         lock (_gate)
         {
@@ -114,6 +114,7 @@ public sealed class SimulatedPrinter
                 Document = document,
                 TotalPages = totalPages,
                 Status = NativeStatus.Spooling,
+                Monochrome = monochrome,
             };
             _jobs.Add(job);
             _queueVersion++;
@@ -295,6 +296,9 @@ public sealed class SimulatedJob
     public int TotalPages { get; set; }
     public int PagesPrinted { get; set; }
     public NativeStatus Status { get; set; }
+
+    /// <summary>The colour setting the job's DEVMODE carries, as a real queue reports it.</summary>
+    public bool? Monochrome { get; set; }
 
     /// <summary>Advance steps spent sitting in the queue after finishing.</summary>
     public int LingerSteps { get; set; }

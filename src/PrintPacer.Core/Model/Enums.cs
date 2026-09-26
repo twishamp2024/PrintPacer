@@ -150,3 +150,26 @@ public enum StartMode
     Immediately = 0,
     AtTime = 1,
 }
+
+/// <summary>
+/// Whether a job's pages go to the printer in colour or in black and white. Chosen per job
+/// on the setup screen and applied to every batch of that job.
+///
+/// The numeric values are what the job database stores, and match the 0/1 of the older
+/// greyscale flag the column held before this type existed.
+/// </summary>
+public enum ColourMode
+{
+    Colour = 0,
+    BlackAndWhite = 1,
+}
+
+public static class ColourModeText
+{
+    /// <summary>The wording used everywhere the mode is shown: setup screen, dashboard, log, report.</summary>
+    public static string Describe(this ColourMode mode) => mode switch
+    {
+        ColourMode.BlackAndWhite => "Black & white",
+        _ => "Colour",
+    };
+}

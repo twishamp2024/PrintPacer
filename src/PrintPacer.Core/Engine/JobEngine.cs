@@ -145,7 +145,7 @@ public sealed class JobEngine : IAsyncDisposable
 
     public Task<JobSnapshot> CreateJobAsync(PdfDocumentInfo document, string printerName,
         int pagesPerBatch, int delayMinutes, StartMode startMode, DateTimeOffset? startAtUtc,
-        int renderDpi, bool grayscale, InvoiceRequest? invoice = null)
+        int renderDpi, ColourMode colourMode, InvoiceRequest? invoice = null)
     {
         if (invoice is not null)
         {
@@ -153,8 +153,8 @@ public sealed class JobEngine : IAsyncDisposable
                 throw new ArgumentOutOfRangeException(nameof(invoice), "Page prices cannot be negative.");
 
             // Without a colour map the bill could only guess, and a guessed bill is a wrong
-            // one. Greyscale is the exception: every page is black and white regardless.
-            if (!grayscale && !PageColourMap.IsValid(invoice.PageColourMap, document.PageCount))
+            // one. Black and white is the exception: every page is charged as black and white.
+            if (colourMode != ColourMode.BlackAndWhite && !PageColourMap.IsValid(invoice.PageColourMap, document.PageCount))
                 throw new ArgumentException("The invoice needs the colour of every page.", nameof(invoice));
         }
 
@@ -184,7 +184,7 @@ public sealed class JobEngine : IAsyncDisposable
                 StartMode = startMode,
                 ScheduledStartUtc = startMode == StartMode.AtTime ? startAtUtc : null,
                 RenderDpi = renderDpi,
-                Grayscale = grayscale,
+                ColourMode = colourMode,
                 InvoiceState = invoice is null ? InvoiceState.NotRequested : InvoiceState.Waiting,
                 BlackWhitePagePrice = invoice?.BlackWhitePagePrice ?? 0m,
                 ColourPagePrice = invoice?.ColourPagePrice ?? 0m,
@@ -202,15 +202,17 @@ public sealed class JobEngine : IAsyncDisposable
 
             Record(job, "Information", "Job", $"Job created for {job.FileName}",
                 $"{job.TotalPages} pages, {job.BatchCount} batches of up to {job.PagesPerBatch}, " +
-                $"{job.DelayMinutes} min between batches, printer \"{job.PrinterName}\".");
+                $"{job.DelayMinutes} min between batches, {job.ColourMode.Describe().ToLowerInvariant()}, " +
+                $"printer \"{job.PrinterName}\".");
 
             if (job.WantsInvoice)
             {
-                var colourPages = job.Grayscale ? 0 : job.PageColourMap!.Count(c => c == PageColourMap.Colour);
+                var blackAndWhite = job.ColourMode == ColourMode.BlackAndWhite;
+                var colourPages = blackAndWhite ? 0 : job.PageColourMap!.Count(c => c == PageColourMap.Colour);
                 Record(job, "Information", "Invoice", "An invoice will print when the job finishes.",
                     $"{job.TotalPages - colourPages} black & white page(s) at {job.BlackWhitePagePrice}, " +
                     $"{colourPages} colour page(s) at {job.ColourPagePrice}" +
-                    (job.Grayscale ? " (printing in greyscale, so none are charged as colour)." : "."));
+                    (blackAndWhite ? " (printing in black & white, so none are charged as colour)." : "."));
             }
 
             Notify(job);
@@ -489,6 +491,7 @@ public sealed class JobEngine : IAsyncDisposable
                 lines.Add($"Printer       : {job.PrinterName}");
                 lines.Add($"Batch size    : {job.PagesPerBatch} pages");
                 lines.Add($"Rest between  : {job.DelayMinutes} minutes");
+                lines.Add($"Print mode    : {job.ColourMode.Describe()}");
                 lines.Add($"State         : {job.State}");
                 lines.Add($"Created       : {job.CreatedUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}");
                 if (job.StartedUtc is { } started)
@@ -739,7 +742,7 @@ public sealed class JobEngine : IAsyncDisposable
             PrinterName = job.PrinterName,
             DocumentToken = attempt.DocumentToken,
             RenderDpi = job.RenderDpi,
-            Grayscale = job.Grayscale,
+            ColourMode = job.ColourMode,
             FitToPrintableArea = job.FitToPrintableArea,
             AutoRotate = job.AutoRotate,
         };
@@ -818,6 +821,7 @@ public sealed class JobEngine : IAsyncDisposable
                 attempt.SubmittedUtc ??= _clock.UtcNow;
                 attempt.State = AttemptState.Submitted;
                 _store.UpdateAttempt(attempt);
+                RecordColourSeenInQueue(job, run.Batch, mine);
             }
 
             if (mine.IsPrinting && !attempt.ObservedPrinting)
@@ -874,6 +878,31 @@ public sealed class JobEngine : IAsyncDisposable
         if (!await CountersSettledAsync(run, ct).ConfigureAwait(false)) return;
 
         await ConcludeAttemptAsync(run, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Windows keeps the settings each job was created with, so for a black and white job the
+    /// queue itself can confirm that the request reached the printer - or show that the
+    /// driver swapped it for colour. A job that carries no colour setting at all says
+    /// neither, and the print engine has already reported that driver when it spooled.
+    /// </summary>
+    private void RecordColourSeenInQueue(PrintJob job, Batch batch, SpoolerJob queued)
+    {
+        if (job.ColourMode != ColourMode.BlackAndWhite) return;
+
+        if (queued.Monochrome == true)
+        {
+            Record(job, "Information", "Printer",
+                $"Windows confirms batch {batch.Number} is set to black & white.",
+                $"Print job #{queued.JobId} carries the monochrome colour setting.");
+        }
+        else if (queued.Monochrome == false)
+        {
+            Record(job, "Warning", "Printer",
+                $"Windows shows batch {batch.Number} set to colour, not black & white.",
+                $"The driver replaced the black & white setting on print job #{queued.JobId}. " +
+                "The pages were still sent in greyscale, but the printer may use colour ink for them.");
+        }
     }
 
     /// <summary>
@@ -985,6 +1014,12 @@ public sealed class JobEngine : IAsyncDisposable
         attempt.FinishedUtc = _clock.UtcNow;
         attempt.Error = result.Error;
         _store.UpdateAttempt(attempt);
+
+        if (result.ColourWarning is { } colourWarning)
+        {
+            Record(job, "Warning", "Printer",
+                $"Batch {batch.Number} could not be guaranteed to print in black & white.", colourWarning);
+        }
 
         _activeRun = null;
         run.Cancellation.Dispose();

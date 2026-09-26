@@ -99,6 +99,12 @@ Practical consequences:
   around 80 seconds to spool — comfortably less than the printer takes to print
   it, so it is not the bottleneck, but it is not instant either.
 - Very complex pages take longer and use more memory.
+- **Black & white depends on the driver.** PrintPacer asks for it the standard
+  way, through the colour setting in the job's DEVMODE, and checks that the driver
+  kept it. A driver that does not offer the setting (Microsoft Print to PDF is
+  one) cannot be told to use black ink only; the pages are still rendered in
+  greyscale, and the setup screen and the log say so. Options a driver keeps to
+  itself, outside the standard setting, are not changed.
 
 ---
 

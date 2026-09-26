@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace PrintPacer.Core.Model;
 
 /// <summary>
@@ -11,7 +13,20 @@ public sealed class AppSettings
     public int DefaultDelayMinutes { get; set; } = 60;
     public string? LastPrinterName { get; set; }
     public int RenderDpi { get; set; } = 300;
-    public bool Grayscale { get; set; }
+
+    /// <summary>
+    /// The print mode last chosen on the setup screen, offered again for the next job. Only a
+    /// starting point: every job has its own mode, picked on the setup screen and shown there.
+    /// </summary>
+    public ColourMode ColourMode { get; set; } = ColourMode.Colour;
+
+    /// <summary>
+    /// The "Render in greyscale" switch that 1.1 and earlier kept in the Settings window. Read
+    /// once so that someone who had it on is offered black and white by default; never written.
+    /// </summary>
+    [JsonPropertyName("grayscale")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyGrayscale { get; set; }
 
     // ---- Invoice (remembered from the last job's setup screen) ----------------
     public bool PrintInvoice { get; set; }

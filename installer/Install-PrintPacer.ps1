@@ -47,7 +47,7 @@ $ErrorActionPreference = 'Stop'
 
 $AppName      = 'PrintPacer'
 $Publisher    = 'PrintPacer'
-$Version      = '1.1.0'
+$Version      = '1.2.0'
 $InstallRoot  = Join-Path $env:LOCALAPPDATA "Programs\$AppName"
 $DataRoot     = Join-Path $env:LOCALAPPDATA $AppName
 $StartMenu    = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'

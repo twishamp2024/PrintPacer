@@ -80,6 +80,7 @@ public sealed record JobSnapshot
     public required int TotalPages { get; init; }
     public required int PagesPerBatch { get; init; }
     public required int DelayMinutes { get; init; }
+    public ColourMode ColourMode { get; init; }
 
     public required JobState State { get; init; }
     public required int CurrentBatchNumber { get; init; }
@@ -138,6 +139,7 @@ public sealed record JobSnapshot
         TotalPages = job.TotalPages,
         PagesPerBatch = job.PagesPerBatch,
         DelayMinutes = job.DelayMinutes,
+        ColourMode = job.ColourMode,
         State = job.State,
         CurrentBatchNumber = job.CurrentBatchNumber,
         NextBatchDueUtc = job.NextBatchDueUtc,

@@ -109,6 +109,10 @@
                     <Border Style="{StaticResource Card}" Margin="0,16,0,0">
                         <StackPanel>
                             <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="18" />
@@ -141,6 +145,19 @@
                                                    FontSize="12" VerticalAlignment="Center"
                                                    HorizontalAlignment="Right" Margin="0,0,12,0" />
                                     </Grid>
+                                </StackPanel>
+
+                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="5" Margin="0,16,0,0">
+                                    <TextBlock Text="PRINT MODE" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox Style="{StaticResource Dropdown}" Width="220" HorizontalAlignment="Left"
+                                              AutomationProperties.Name="Print mode"
+                                              ItemsSource="{Binding ColourModes}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Mode"
+                                              SelectedValue="{Binding ColourMode, Mode=TwoWay}" />
+                                    <TextBlock Text="{Binding ColourModeNote}" Style="{StaticResource Secondary}"
+                                               Foreground="{Binding ColourModeNoteBrush}"
+                                               FontSize="11.5" Margin="2,5,0,0" TextWrapping="Wrap"
+                                               Visibility="{Binding ColourModeNote, Converter={StaticResource ShowText}}" />
                                 </StackPanel>
                             </Grid>
 

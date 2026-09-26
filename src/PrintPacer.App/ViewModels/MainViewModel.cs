@@ -13,6 +13,7 @@ using PrintPacer.Core.Engine;
 using PrintPacer.Core.Model;
 using PrintPacer.Core.Pdf;
 using PrintPacer.Core.Persistence;
+using PrintPacer.Core.Printing;
 using PrintPacer.Core.Spooler;
 using Serilog;
 
@@ -54,6 +55,7 @@ public sealed class MainViewModel : ObservableObject
 
         _pagesPerBatch = settings.DefaultPagesPerBatch.ToString();
         _delayMinutes = settings.DefaultDelayMinutes.ToString();
+        _colourMode = settings.ColourMode;
         _printInvoice = settings.PrintInvoice;
         _blackWhitePrice = FormatPrice(settings.BlackWhitePagePrice);
         _colourPrice = FormatPrice(settings.ColourPagePrice);
@@ -142,6 +144,7 @@ public sealed class MainViewModel : ObservableObject
         {
             if (!Set(ref _selectedPrinter, value)) return;
             Raise(nameof(PrinterHint));
+            RefreshColourModeNote();
             RefreshCanStart();
             if (value is not null)
             {
@@ -229,6 +232,97 @@ public sealed class MainViewModel : ObservableObject
         set { if (Set(ref _startTime, value)) { Raise(nameof(BatchPreview)); RefreshCanStart(); } }
     }
 
+    // ---- Print mode ------------------------------------------------------------------
+
+    public sealed record ColourModeOption(ColourMode Mode, string Label)
+    {
+        // What screen readers announce for the item.
+        public override string ToString() => Label;
+    }
+
+    public IReadOnlyList<ColourModeOption> ColourModes { get; } = Enum.GetValues<ColourMode>()
+        .Select(mode => new ColourModeOption(mode, mode.Describe()))
+        .ToList();
+
+    private ColourMode _colourMode;
+
+    /// <summary>
+    /// The mode for the job being set up, and the only place the setup screen keeps it. It
+    /// starts at the last job's choice and goes into the job itself when Start is pressed.
+    /// </summary>
+    public ColourMode ColourMode
+    {
+        get => _colourMode;
+        set
+        {
+            if (!Set(ref _colourMode, value)) return;
+            Raise(nameof(BatchPreview));
+            RefreshColourModeNote();
+
+            // Black and white makes every page a black and white page on the bill, so the
+            // colour check is only needed when printing in colour.
+            RestartColourCheck();
+            Raise(nameof(InvoiceEstimate));
+            RefreshCanStart();
+        }
+    }
+
+    private bool BlackAndWhite => ColourMode == ColourMode.BlackAndWhite;
+
+    /// <summary>What each printer's driver said about black and white, asked once per printer.</summary>
+    private readonly Dictionary<string, MonochromeCheck> _monochromeChecks = new();
+    private readonly HashSet<string> _monochromeChecksRunning = new();
+
+    /// <summary>
+    /// Under the print mode: what black and white will actually mean on the chosen printer,
+    /// including a warning when its driver cannot be told to use black ink only.
+    /// </summary>
+    public string? ColourModeNote
+    {
+        get
+        {
+            if (!BlackAndWhite || SelectedPrinter is null) return null;
+            if (!_monochromeChecks.TryGetValue(SelectedPrinter, out var check)) return "Checking the printer driver…";
+
+            return check.Support switch
+            {
+                MonochromeSupport.Honoured =>
+                    "The printer is asked to use black ink only, and every page is sent in greyscale.",
+                MonochromeSupport.MonochromeDevice => "This printer only prints in black & white.",
+                _ => check.Warning(SelectedPrinter),
+            };
+        }
+    }
+
+    public Brush ColourModeNoteBrush =>
+        BlackAndWhite && SelectedPrinter is not null &&
+        _monochromeChecks.TryGetValue(SelectedPrinter, out var check) && !check.Guaranteed
+            ? Resource("Warning")
+            : Resource("TextSecondary");
+
+    private void RefreshColourModeNote()
+    {
+        Raise(nameof(ColourModeNote));
+        Raise(nameof(ColourModeNoteBrush));
+
+        if (!BlackAndWhite || SelectedPrinter is not { } printer) return;
+        if (_monochromeChecks.ContainsKey(printer) || !_monochromeChecksRunning.Add(printer)) return;
+
+        // Asking the driver can take a moment on a network printer, so keep it off the UI
+        // thread. The check never throws: a driver that fails comes back as Unknown.
+        _ = Task.Run(() =>
+        {
+            var check = PrinterColour.Check(printer);
+            _dispatcher.BeginInvoke(() =>
+            {
+                _monochromeChecksRunning.Remove(printer);
+                _monochromeChecks[printer] = check;
+                Raise(nameof(ColourModeNote));
+                Raise(nameof(ColourModeNoteBrush));
+            });
+        });
+    }
+
     /// <summary>
     /// A plain-language preview of the exact schedule, shown before anything is committed.
     /// The user should never have to guess what pressing the button will do.
@@ -245,11 +339,12 @@ public sealed class MainViewModel : ObservableObject
             var start = ResolveStart(out var startProblem);
             if (startProblem is not null) return startProblem;
 
+            var mode = ColourMode.Describe().ToLowerInvariant();
             var lines = new List<string>
             {
                 batches.Count == 1
-                    ? $"One print job of {batches[0].PageCount} page(s)."
-                    : $"{batches.Count} separate print jobs, {delay} minute(s) apart.",
+                    ? $"One print job of {batches[0].PageCount} page(s), in {mode}."
+                    : $"{batches.Count} separate print jobs, {delay} minute(s) apart, every one in {mode}.",
             };
 
             var clock = start ?? DateTimeOffset.Now;
@@ -320,7 +415,7 @@ public sealed class MainViewModel : ObservableObject
             if (!TryReadPrices(out var blackWhite, out var colour, out var problem)) return problem!;
 
             var colourPages = 0;
-            if (!Settings.Grayscale)
+            if (!BlackAndWhite)
             {
                 if (_colourMap is null)
                     return _colourProblem ?? $"Checking which pages use colour…  {_pagesChecked} of {Document.PageCount}";
@@ -335,10 +430,10 @@ public sealed class MainViewModel : ObservableObject
                 $"Total{"",31}{Money(blackWhitePages * blackWhite + colourPages * colour),12}",
             };
 
-            if (Settings.Grayscale)
+            if (BlackAndWhite)
             {
                 lines.Add("");
-                lines.Add("Greyscale printing is on in Settings, so every page is charged as black & white.");
+                lines.Add("Printing in black & white, so every page is charged as black & white.");
             }
             else if (colourPages > 0)
             {
@@ -365,7 +460,7 @@ public sealed class MainViewModel : ObservableObject
         _colourProblem = null;
         _pagesChecked = 0;
 
-        if (!PrintInvoice || Document is null || Settings.Grayscale) return;
+        if (!PrintInvoice || Document is null || BlackAndWhite) return;
 
         var document = Document;
         var check = new CancellationTokenSource();
@@ -471,7 +566,7 @@ public sealed class MainViewModel : ObservableObject
     public string JobSubtitle => _job is null
         ? ""
         : $"{_job.TotalPages} pages  ·  {_job.BatchCount} batches of up to {_job.PagesPerBatch}  " +
-          $"·  {_job.DelayMinutes} min apart  ·  {_job.PrinterName}";
+          $"·  {_job.DelayMinutes} min apart  ·  {_job.ColourMode.Describe()}  ·  {_job.PrinterName}";
 
     public int PagesDone => _job?.PagesDone ?? 0;
 
@@ -721,7 +816,7 @@ public sealed class MainViewModel : ObservableObject
         if (PrintInvoice)
         {
             if (!TryReadPrices(out var blackWhite, out var colour, out _)) return;
-            if (!Settings.Grayscale && _colourMap is null) return;
+            if (!BlackAndWhite && _colourMap is null) return;
             invoice = new InvoiceRequest(blackWhite, colour, _colourMap);
         }
 
@@ -731,11 +826,12 @@ public sealed class MainViewModel : ObservableObject
                 Document, SelectedPrinter, perBatch, delay,
                 StartLater ? StartMode.AtTime : StartMode.Immediately,
                 start?.ToUniversalTime(),
-                Settings.RenderDpi, Settings.Grayscale, invoice);
+                Settings.RenderDpi, ColourMode, invoice);
 
             Settings.DefaultPagesPerBatch = perBatch;
             Settings.DefaultDelayMinutes = delay;
             Settings.LastPrinterName = SelectedPrinter;
+            Settings.ColourMode = ColourMode;
             Settings.PrintInvoice = PrintInvoice;
             if (invoice is not null)
             {
@@ -1080,7 +1176,7 @@ public sealed class MainViewModel : ObservableObject
 
             // Still checking pages for colour: the estimate shows progress, so there is no
             // problem to report, but the job cannot be priced until the check is done.
-            if (!Settings.Grayscale && _colourMap is null) { CanStart = false; SetupProblem = _colourProblem; return; }
+            if (!BlackAndWhite && _colourMap is null) { CanStart = false; SetupProblem = _colourProblem; return; }
         }
 
         SetupProblem = null;
@@ -1149,6 +1245,9 @@ public sealed class MainViewModel : ObservableObject
         var previous = SelectedPrinter;
         Printers.Clear();
 
+        // A driver may have been changed or updated since it was last asked.
+        _monochromeChecks.Clear();
+
         foreach (var name in _spooler.ListPrinterNames().OrderBy(n => n))
             Printers.Add(name);
 
@@ -1169,10 +1268,6 @@ public sealed class MainViewModel : ObservableObject
         _engine.UpdateSettings(settings);
         _probes.InvalidateAll();
         _lastDeviceProbe = DateTimeOffset.MinValue;
-
-        // Greyscale decides whether colour matters to the bill at all.
-        if (_colourMap is null && _colourCheck is null) RestartColourCheck();
-        Raise(nameof(InvoiceEstimate));
         RefreshCanStart();
     }
 

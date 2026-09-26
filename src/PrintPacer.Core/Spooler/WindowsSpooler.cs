@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using PrintPacer.Core.Printing;
 using Serilog;
 
 namespace PrintPacer.Core.Spooler;
@@ -192,6 +193,7 @@ public sealed class WindowsSpooler : ISpooler
                         StatusText = DescribeJobStatus(j.Status),
                         TotalPages = (int)j.TotalPages,
                         PagesPrinted = (int)j.PagesPrinted,
+                        Monochrome = PrinterColour.ReadMonochrome(j.pDevMode),
                         Position = (int)j.Position,
                         SizeBytes = j.Size,
                         SubmittedUtc = ToDateTime(j.Submitted),

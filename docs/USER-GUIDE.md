@@ -30,7 +30,28 @@ Defaults to your Windows default printer. The line underneath shows the driver
 and port, which is a quick way to confirm you have the right one when two
 printers have similar names.
 
-### 3. Pages per batch
+### 3. Print mode
+
+**Colour** (the default) prints pages as they are. **Black & white** prints every
+batch of the job in black and white: PrintPacer asks the printer's driver to use
+black ink only, and sends every page in greyscale as well.
+
+The line underneath says what the chosen printer will do:
+
+- *The printer is asked to use black ink only* — the driver accepted the setting.
+  Each batch's entry in the log confirms that Windows recorded it on the print
+  job: *"Windows confirms batch 3 is set to black & white."*
+- *This printer only prints in black & white* — nothing to set.
+- A warning — the driver does not offer a black & white setting to Windows
+  programs. The pages still go out in greyscale, but the printer may mix the grey
+  from colour inks. If that matters, choose Greyscale or Black & white in the
+  printer's own **Printing Preferences** as well. Each batch notes this in the log
+  rather than claiming black and white.
+
+The choice is made per job and is remembered as the starting point for the next
+one; the dashboard shows the mode of the job that is running.
+
+### 4. Pages per batch
 
 **Start with 50.** If your printer still stalls, come down to 30 or 25.
 
@@ -38,7 +59,7 @@ The number is a ceiling, not a requirement — a 203-page document at 50 per bat
 gives four batches of 50 and one of 3. Setting it larger than the document just
 gives you one batch.
 
-### 4. Rest between batches
+### 5. Rest between batches
 
 **Start with 60 minutes.** This is the number that actually fixes the problem;
 everything else is bookkeeping.
@@ -46,11 +67,11 @@ everything else is bookkeeping.
 `0` sends the next batch as soon as the previous one is verified, which is useful
 for testing but defeats the purpose in normal use.
 
-### 5. Start later (optional)
+### 6. Start later (optional)
 
 Tick **Start later** and give a date and a 24-hour time to begin at, say, 23:30.
 
-### 6. Print an invoice (optional)
+### 7. Print an invoice (optional)
 
 Tick **Print an invoice when the job finishes** and enter the price of a black &
 white page and of a colour page. Amounts use your Windows region's currency.
@@ -68,8 +89,8 @@ Colour pages: 151–200
 
 A page counts as colour when it actually puts visible colour on paper — a red
 heading or a photo does; black text that happens to be stored as RGB, or a grey
-scan, does not. If **Render in greyscale** is on in Settings, every page is
-charged at the black & white rate, because that is how it prints.
+scan, does not. If the print mode is **Black & white**, every page is charged at
+the black & white rate, because that is how it prints.
 
 **START PRINTING** waits until the colour check has finished (a few seconds for
 a few hundred pages). Your prices are remembered for next time.
@@ -88,12 +109,12 @@ If PrintPacer stops while the invoice is being sent, it does not resend it by
 itself on the next start — check the tray, and press **Print invoice again** if
 it is not there.
 
-### 7. Read "What will happen"
+### 8. Read "What will happen"
 
 Before anything is sent, this panel spells out the actual plan:
 
 ```
-4 separate print jobs, 60 minute(s) apart.
+4 separate print jobs, 60 minute(s) apart, every one in black & white.
     Batch 1:  Pages 1–50          Sat 23:00
     Batch 2:  Pages 51–100        Sun 00:00
     Batch 3:  Pages 101–150       Sun 01:00
@@ -102,7 +123,7 @@ Before anything is sent, this panel spells out the actual plan:
 
 If that is not what you expected, fix it now.
 
-### 8. Press START PRINTING
+### 9. Press START PRINTING
 
 ---
 
@@ -255,7 +276,6 @@ finished. Deliberately sparse: a blocked printer notifies at most every 30 minut
 **Printing**
 - Render resolution *(300 dpi)* — higher is slower and uses much more memory.
   300 dpi matches what an inkjet actually puts on plain paper.
-- Render in greyscale *(off)*
 
 **When something goes wrong**
 - Re-check the printer every *5* minutes

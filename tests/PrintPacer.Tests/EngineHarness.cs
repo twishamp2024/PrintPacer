@@ -140,6 +140,7 @@ public sealed class EngineHarness : IAsyncDisposable
         {
             FailBeforeAnyOutput = PrintEngine.FailBeforeAnyOutput,
             FailAfterPartialOutput = PrintEngine.FailAfterPartialOutput,
+            DriverIgnoresMonochrome = PrintEngine.DriverIgnoresMonochrome,
         };
         Notifier = new RecordingNotifier();
         Power = new RecordingPowerManager();
@@ -157,17 +158,18 @@ public sealed class EngineHarness : IAsyncDisposable
     public Task<IReadOnlyList<JobSnapshot>> JobsAsync() => Engine.GetJobsAsync();
 
     public Task<JobSnapshot> CreateJobAsync(int pagesPerBatch, int delayMinutes,
-        StartMode startMode = StartMode.Immediately, DateTimeOffset? startAt = null) =>
+        StartMode startMode = StartMode.Immediately, DateTimeOffset? startAt = null,
+        ColourMode colourMode = ColourMode.Colour) =>
         Engine.CreateJobAsync(Document, Printer.Name, pagesPerBatch, delayMinutes,
-            startMode, startAt, 300, false);
+            startMode, startAt, 300, colourMode);
 
     /// <summary>A job that should print an invoice at the end, like ticking the box on the setup screen.</summary>
     public Task<JobSnapshot> CreateJobWithInvoiceAsync(int pagesPerBatch, int delayMinutes,
-        decimal blackWhitePrice, decimal colourPrice, bool grayscale = false)
+        decimal blackWhitePrice, decimal colourPrice, ColourMode colourMode = ColourMode.Colour)
     {
         var map = PageColourMap.Encode(PageColourAnalyzer.Analyse(PdfPath));
         return Engine.CreateJobAsync(Document, Printer.Name, pagesPerBatch, delayMinutes,
-            StartMode.Immediately, null, 300, grayscale,
+            StartMode.Immediately, null, 300, colourMode,
             new InvoiceRequest(blackWhitePrice, colourPrice, map));
     }
 

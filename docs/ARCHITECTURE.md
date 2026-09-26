@@ -128,6 +128,30 @@ Readable in the Windows print queue, and unambiguous to the application. This
 token is how a restarted process recognises a job it submitted before it died,
 and it is never reused between attempts.
 
+### 4.4 Colour or black and white
+
+The print mode is a `ColourMode` on the job, chosen on the setup screen and
+stored in the `jobs` table (the `grayscale` column, whose 0/1 predate the enum and
+equal its values). Every batch builds its `PrintRequest` from the job, so retries,
+split remainders and batches sent after a restart all carry the same mode.
+
+For black and white, `PdfiumPrintEngine` does two things:
+
+1. **Asks the driver.** `PageSettings.Color = false` becomes `dmColor =
+   DMCOLOR_MONOCHROME` in the DEVMODE the job's device context is created with.
+   `PrintDocument` silently skips the field when a driver does not declare it, so
+   `PrinterColour.Check` builds that same DEVMODE (`PrinterSettings.GetHdevmode`)
+   before printing and reads back what the driver kept. A driver that dropped it
+   is reported on the batch rather than assumed to have complied.
+2. **Renders the pages grey** (PDFium's greyscale flag). Every page is rasterised
+   anyway, so this costs nothing, and no colour reaches the driver even if it
+   ignores the request.
+
+Windows stores each job's DEVMODE with the job, so the monitor reads it back from
+`JOB_INFO_2` when it first sees the batch in the queue, and logs that the queued
+job really is set to black and white — or warns that it is not. Colour jobs
+request `DMCOLOR_COLOR` exactly as before.
+
 ---
 
 ## 5. Not printing twice

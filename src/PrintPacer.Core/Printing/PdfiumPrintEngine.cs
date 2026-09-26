@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using Docnet.Core;
 using Docnet.Core.Models;
 using Docnet.Core.Readers;
+using PrintPacer.Core.Model;
 using PrintPacer.Core.Pdf;
 using Serilog;
 
@@ -115,8 +116,13 @@ public sealed class PdfiumPrintEngine : IPrintEngine
                 }
             }
 
+            var blackAndWhite = request.ColourMode == ColourMode.BlackAndWhite;
+
+            // Black and white is asked of the driver below. Rendering the pages grey as well
+            // costs nothing - every page is rasterised here anyway - and means no colour
+            // reaches the driver even if it ignores the request.
             var flags = RenderFlags.RenderForPrinting | RenderFlags.LimitImageCacheSize;
-            if (request.Grayscale) flags |= RenderFlags.Grayscale;
+            if (blackAndWhite) flags |= RenderFlags.Grayscale;
 
             var nextPage = request.FirstPage;
 
@@ -131,7 +137,21 @@ public sealed class PdfiumPrintEngine : IPrintEngine
             // Keep the graphics origin at the top-left of the printable area so that the
             // fit calculation below is expressed in one consistent coordinate space.
             document.OriginAtMargins = false;
-            document.DefaultPageSettings.Color = !request.Grayscale;
+
+            // Becomes dmColor in the DEVMODE the job is created with: DMCOLOR_MONOCHROME for
+            // black and white, DMCOLOR_COLOR otherwise. PrintDocument drops it silently when
+            // the driver does not declare the field, so for black and white, confirm that the
+            // DEVMODE it is about to use really says monochrome.
+            document.DefaultPageSettings.Color = !blackAndWhite;
+
+            string? colourWarning = null;
+            if (blackAndWhite)
+            {
+                var check = PrinterColour.Check(settings, document.DefaultPageSettings);
+                colourWarning = check.Warning(request.PrinterName);
+                Log.Information("Black and white on {Printer}: {Support}{Detail}", request.PrinterName,
+                    check.Support, check.Detail is null ? "" : $" ({check.Detail})");
+            }
 
             document.PrintPage += (_, e) =>
             {
@@ -160,8 +180,9 @@ public sealed class PdfiumPrintEngine : IPrintEngine
                 e.HasMorePages = nextPage <= request.LastPage;
             };
 
-            Log.Information("Spooling {Token}: pages {First}-{Last} to {Printer} at {Dpi} dpi",
-                request.DocumentToken, request.FirstPage, request.LastPage, request.PrinterName, dpi);
+            Log.Information("Spooling {Token}: pages {First}-{Last} to {Printer} at {Dpi} dpi in {Mode}",
+                request.DocumentToken, request.FirstPage, request.LastPage, request.PrinterName, dpi,
+                request.ColourMode.Describe().ToLowerInvariant());
 
             document.Print();
 
@@ -184,6 +205,7 @@ public sealed class PdfiumPrintEngine : IPrintEngine
             {
                 Spooled = true,
                 PagesRendered = pagesRendered,
+                ColourWarning = colourWarning,
                 StartedUtc = started,
                 FinishedUtc = DateTimeOffset.UtcNow,
             };

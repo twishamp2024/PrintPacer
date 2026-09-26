@@ -99,9 +99,9 @@ public class InvoiceTests
     }
 
     [Fact]
-    public void GreyscaleJobsChargeEveryPageAsBlackAndWhite()
+    public void BlackAndWhiteJobsChargeEveryPageAsBlackAndWhite()
     {
-        var job = Job(totalPages: 4, map: "CCCC", blackWhite: 2m, colour: 10m, grayscale: true);
+        var job = Job(totalPages: 4, map: "CCCC", blackWhite: 2m, colour: 10m, colourMode: ColourMode.BlackAndWhite);
         foreach (var b in job.Batches) b.State = BatchState.Completed;
 
         var invoice = Invoice.For(job, DateTimeOffset.UtcNow);
@@ -109,7 +109,7 @@ public class InvoiceTests
         invoice.ColourPages.Should().Be(0);
         invoice.BlackWhitePages.Should().Be(4);
         invoice.Total.Should().Be(8m);
-        invoice.PrintedInGreyscale.Should().BeTrue();
+        invoice.PrintedInBlackAndWhite.Should().BeTrue();
     }
 
     [Fact]
@@ -191,10 +191,10 @@ public class InvoiceTests
     }
 
     [Fact]
-    public async Task AGreyscaleJobIsBilledAsBlackAndWhite()
+    public async Task ABlackAndWhiteJobIsBilledAsBlackAndWhite()
     {
         await using var h = await EngineHarness.CreateAsync(4, colourPages: new[] { 1, 2 });
-        var job = await h.CreateJobWithInvoiceAsync(4, 0, blackWhitePrice: 1m, colourPrice: 5m, grayscale: true);
+        var job = await h.CreateJobWithInvoiceAsync(4, 0, blackWhitePrice: 1m, colourPrice: 5m, ColourMode.BlackAndWhite);
 
         h.Engine.StartJob(job.Id);
 
@@ -265,7 +265,7 @@ public class InvoiceTests
         await using var h = await EngineHarness.CreateAsync(4);
 
         var act = () => h.Engine.CreateJobAsync(h.Document, h.Printer.Name, 2, 0, StartMode.Immediately, null,
-            300, false, new InvoiceRequest(1m, 5m, "BB"));
+            300, ColourMode.Colour, new InvoiceRequest(1m, 5m, "BB"));
 
         await act.Should().ThrowAsync<ArgumentException>();
     }
@@ -315,7 +315,7 @@ public class InvoiceTests
     // ---- Helpers -----------------------------------------------------------------
 
     private static PrintJob Job(int totalPages, string? map, decimal blackWhite, decimal colour,
-        bool grayscale = false, bool invoice = true)
+        ColourMode colourMode = ColourMode.Colour, bool invoice = true)
     {
         var id = Guid.NewGuid().ToString("N");
         var job = new PrintJob
@@ -327,7 +327,7 @@ public class InvoiceTests
             TotalPages = totalPages,
             PrinterName = "Printer",
             PagesPerBatch = 5,
-            Grayscale = grayscale,
+            ColourMode = colourMode,
             InvoiceState = invoice ? InvoiceState.Waiting : InvoiceState.NotRequested,
             BlackWhitePagePrice = blackWhite,
             ColourPagePrice = colour,

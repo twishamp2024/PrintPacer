@@ -39,7 +39,8 @@ public sealed class PrintJob
     /// <summary>Render resolution handed to PDFium before drawing onto the printer DC.</summary>
     public int RenderDpi { get; init; } = 300;
 
-    public bool Grayscale { get; init; }
+    /// <summary>Applies to every batch of the job, including retries and split remainders.</summary>
+    public ColourMode ColourMode { get; init; } = ColourMode.Colour;
     public bool FitToPrintableArea { get; init; } = true;
     public bool AutoRotate { get; init; } = true;
 

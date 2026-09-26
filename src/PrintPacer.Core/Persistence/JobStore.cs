@@ -237,7 +237,7 @@ public sealed class JobStore : IDisposable
                 ("$printer", job.PrinterName), ("$ppb", (long)job.PagesPerBatch),
                 ("$delay", (long)job.DelayMinutes), ("$mode", (long)job.StartMode),
                 ("$start", Time(job.ScheduledStartUtc)),
-                ("$dpi", (long)job.RenderDpi), ("$gray", job.Grayscale ? 1L : 0L),
+                ("$dpi", (long)job.RenderDpi), ("$gray", (long)job.ColourMode),
                 ("$fit", job.FitToPrintableArea ? 1L : 0L), ("$rot", job.AutoRotate ? 1L : 0L),
                 ("$state", (long)job.State), ("$cur", (long)job.CurrentBatchNumber),
                 ("$due", Time(job.NextBatchDueUtc)),
@@ -570,7 +570,11 @@ public sealed class JobStore : IDisposable
         StartMode = (StartMode)(GetLong(r, "start_mode") ?? 0),
         ScheduledStartUtc = ParseTime(GetString(r, "scheduled_start_utc")),
         RenderDpi = (int)(GetLong(r, "render_dpi") ?? 300),
-        Grayscale = (GetLong(r, "grayscale") ?? 0) != 0,
+        // The column predates ColourMode and is named for the greyscale flag it used to hold;
+        // its 0/1 are the enum's values. Anything unexpected prints in colour, the default.
+        ColourMode = GetLong(r, "grayscale") == (long)ColourMode.BlackAndWhite
+            ? ColourMode.BlackAndWhite
+            : ColourMode.Colour,
         FitToPrintableArea = (GetLong(r, "fit_to_printable") ?? 1) != 0,
         AutoRotate = (GetLong(r, "auto_rotate") ?? 1) != 0,
         State = (JobState)(GetLong(r, "state") ?? 0),

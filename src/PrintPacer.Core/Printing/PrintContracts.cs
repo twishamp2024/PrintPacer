@@ -1,3 +1,5 @@
+using PrintPacer.Core.Model;
+
 namespace PrintPacer.Core.Printing;
 
 /// <summary>A request to print one contiguous page range as exactly one Windows print job.</summary>
@@ -18,7 +20,7 @@ public sealed record PrintRequest
     public required string DocumentToken { get; init; }
 
     public int RenderDpi { get; init; } = 300;
-    public bool Grayscale { get; init; }
+    public ColourMode ColourMode { get; init; } = ColourMode.Colour;
     public bool FitToPrintableArea { get; init; } = true;
     public bool AutoRotate { get; init; } = true;
 
@@ -48,6 +50,14 @@ public sealed record PrintResult
     public int PagesRendered { get; init; }
 
     public string? Error { get; init; }
+
+    /// <summary>
+    /// Set when a black and white batch spooled but the driver would not accept the black
+    /// and white setting. Not a failure - the pages were sent, in greyscale - but the user
+    /// is told rather than left believing the printer was asked for black ink only.
+    /// </summary>
+    public string? ColourWarning { get; init; }
+
     public DateTimeOffset StartedUtc { get; init; }
     public DateTimeOffset FinishedUtc { get; init; }
 

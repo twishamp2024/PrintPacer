@@ -34,7 +34,6 @@ public partial class SettingsWindow : Window
         NotifyJob.IsChecked = settings.NotifyOnJobComplete;
 
         SelectDpi(settings.RenderDpi);
-        Grayscale.IsChecked = settings.Grayscale;
 
         RetryInterval.Text = settings.RetryIntervalMinutes.ToString(CultureInfo.InvariantCulture);
         BlockedGiveUp.Text = settings.BlockedGiveUpMinutes.ToString(CultureInfo.InvariantCulture);
@@ -82,7 +81,6 @@ public partial class SettingsWindow : Window
 
         if (RenderDpi.SelectedItem is ComboBoxItem { Tag: string dpiTag } && int.TryParse(dpiTag, out var dpi))
             _settings.RenderDpi = dpi;
-        _settings.Grayscale = Grayscale.IsChecked == true;
 
         _settings.RetryIntervalMinutes = retry;
         _settings.BlockedGiveUpMinutes = giveUp;

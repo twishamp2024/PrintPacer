@@ -204,8 +204,8 @@ public static class InvoiceLayout
 
         // ---- How colour was decided -------------------------------------------
         string note;
-        if (invoice.PrintedInGreyscale)
-            note = "This job was printed in greyscale, so every page is charged at the black & white rate.";
+        if (invoice.PrintedInBlackAndWhite)
+            note = "This job was printed in black & white, so every page is charged at the black & white rate.";
         else if (invoice.ColourPages == 0)
             note = "No page contained colour, so every page is charged at the black & white rate.";
         else

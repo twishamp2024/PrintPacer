@@ -2,6 +2,7 @@ using Serilog;
 using Docnet.Core;
 using Docnet.Core.Models;
 using PrintPacer.Core.Device;
+using PrintPacer.Core.Model;
 using PrintPacer.Core.Pdf;
 using PrintPacer.Core.Printing;
 using PrintPacer.Core.Spooler;
@@ -26,6 +27,7 @@ switch (command)
     case "makepdfs": MakePdfs(); break;
     case "info": Info(); break;
     case "print": await PrintAsync(); break;
+    case "colour": Colour(); break;
     case "verify": Verify(); break;
     case "rendercheck": RenderCheck(); break;
     case "makeicon": IconBuilder.Write(args[1]); Console.WriteLine($"  wrote {args[1]}"); break;
@@ -41,8 +43,9 @@ switch (command)
               device [printerName]                 resolve address and probe the device
               makepdfs <outDir>                    generate the test fixture PDFs
               info <file.pdf>                      inspect a PDF the way the app does
-              print <pdf> <first> <last> <printer> [outFile]
+              print <pdf> <first> <last> <printer> [outFile] [--bw]
                                                    submit one batch as one spooler job
+              colour [printerName]                 ask each driver whether it accepts black & white
               verify <printed.pdf> <source.pdf> [expectedFirst expectedLast]
                                                    identify which source pages were printed
             """);
@@ -170,13 +173,30 @@ void Info()
     }
 }
 
+// Read-only: builds each driver's DEVMODE for a black and white job, exactly as a batch
+// would, and reports whether the monochrome setting survived. Nothing is printed.
+void Colour()
+{
+    var spooler = new WindowsSpooler();
+    var names = args.Length > 1 ? new[] { args[1] } : spooler.ListPrinterNames().ToArray();
+    foreach (var name in names)
+    {
+        var check = PrinterColour.Check(name);
+        Console.WriteLine($"  {name}");
+        Console.WriteLine($"      black & white: {check.Support}{(check.Detail is null ? "" : $" ({check.Detail})")}");
+        if (check.Warning(name) is { } warning) Console.WriteLine($"      warning      : {warning}");
+    }
+}
+
 async Task PrintAsync()
 {
-    var source = args[1];
-    var first = int.Parse(args[2]);
-    var last = int.Parse(args[3]);
-    var printer = args[4];
-    var outFile = args.Length > 5 ? args[5] : null;
+    var positional = args.Where(a => !a.StartsWith("--")).ToArray();
+    var source = positional[1];
+    var first = int.Parse(positional[2]);
+    var last = int.Parse(positional[3]);
+    var printer = positional[4];
+    var outFile = positional.Length > 5 ? positional[5] : null;
+    var mode = args.Contains("--bw") ? ColourMode.BlackAndWhite : ColourMode.Colour;
 
     var token = $"PrintPacer TEST {Guid.NewGuid():N}"[..40];
     var engine = new PdfiumPrintEngine();
@@ -189,12 +209,14 @@ async Task PrintAsync()
         PrinterName = printer,
         DocumentToken = token,
         RenderDpi = 300,
+        ColourMode = mode,
         OutputFilePath = outFile is null ? null : Path.GetFullPath(outFile),
     };
 
     Console.WriteLine($"token   : {token}");
     Console.WriteLine($"range   : {first}-{last} ({request.PageCount} pages)");
     Console.WriteLine($"printer : {printer}");
+    Console.WriteLine($"mode    : {mode.Describe()}");
 
     // Watch the spooler while the job is in flight, to prove the token is discoverable.
     using var cts = new CancellationTokenSource();
@@ -206,7 +228,8 @@ async Task PrintAsync()
         {
             foreach (var j in spooler.ListJobs(printer, out var ok).Where(j => j.Document == token))
             {
-                var line = $"    spooler: #{j.JobId} [{j.StatusText}] {j.PagesPrinted}/{j.TotalPages}";
+                var colour = j.Monochrome switch { true => "monochrome", false => "colour", null => "no colour setting" };
+                var line = $"    spooler: #{j.JobId} [{j.StatusText}] {j.PagesPrinted}/{j.TotalPages} DEVMODE {colour}";
                 if (seen.Add(line)) Console.WriteLine(line);
             }
             try { await Task.Delay(300, cts.Token); } catch (OperationCanceledException) { break; }
@@ -224,6 +247,7 @@ async Task PrintAsync()
     Console.WriteLine($"spooled : {result.Spooled}  pages={result.PagesRendered}  " +
                       $"[{sw.ElapsedMilliseconds} ms]");
     if (result.Error is not null) Console.WriteLine($"error   : {result.Error}");
+    if (result.ColourWarning is not null) Console.WriteLine($"warning : {result.ColourWarning}");
 }
 
 // Confirms what PDFium actually puts in the buffer: in particular whether the page
