@@ -70,8 +70,8 @@ public sealed class EngineHarness : IAsyncDisposable
             RetryIntervalMinutes = 5,
             MaxAutoRetries = 3,
             StallTimeoutMinutes = 30,
-            // Poll the simulated queue on every tick, so the simulated printer cannot
-            // finish a batch in the gap between two polls.
+            // Poll the simulated queue on every tick. On its own this only narrows the gap
+            // between two polls; WaitUntilAsync is what keeps the printer from crossing it.
             SpoolerPollSeconds = 0,
             BlockedGiveUpMinutes = 240,
             KeepAwakeWhilePrinting = true,
@@ -174,6 +174,12 @@ public sealed class EngineHarness : IAsyncDisposable
     /// <summary>
     /// Waits for a condition while driving the simulated printer forward. Without the
     /// printer advancing, a queued job would never finish and every test would time out.
+    ///
+    /// The printer only takes a step once the engine has listed the queue since the last
+    /// change, so it runs in lockstep with the monitor however late the engine's thread is
+    /// scheduled. Otherwise a slow engine (cold JIT, a busy machine) can see a 50-page job at
+    /// 40 pages and next find it gone - which, with no page counter to corroborate, the engine
+    /// rightly refuses to call printed.
     /// </summary>
     public async Task<bool> WaitUntilAsync(Func<bool> condition, int timeoutMs = 10_000,
         bool advancePrinter = true)
@@ -182,7 +188,7 @@ public sealed class EngineHarness : IAsyncDisposable
         while (DateTime.UtcNow < deadline)
         {
             if (condition()) return true;
-            if (advancePrinter) Printer.Advance();
+            if (advancePrinter && !Printer.HasUnobservedQueueChange) Printer.Advance();
 
             // Let a little simulated time pass on every poll. Without this the injected
             // clock would be frozen, and anything the engine schedules against it - the

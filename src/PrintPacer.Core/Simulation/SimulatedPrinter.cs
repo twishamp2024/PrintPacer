@@ -84,6 +84,24 @@ public sealed class SimulatedPrinter
 
     private readonly Queue<long> _pendingCounterUpdates = new();
 
+    // Bumped whenever something a queue listing would show changes (a job appears, starts,
+    // prints pages, or leaves), and copied when the spooler lists the queue. The two differ
+    // exactly when the queue holds a state that has never been read.
+    private long _queueVersion;
+    private long _observedQueueVersion;
+
+    /// <summary>
+    /// True when the queue has changed since the spooler last listed it. A test driving the
+    /// printer from another thread uses this to avoid stepping past a state the engine has not
+    /// yet seen: on real hardware a 50-page job takes minutes and cannot slip between two polls,
+    /// but a simulated one takes a handful of steps and would, whenever the engine's thread is
+    /// slow to be scheduled.
+    /// </summary>
+    public bool HasUnobservedQueueChange
+    {
+        get { lock (_gate) return _queueVersion != _observedQueueVersion; }
+    }
+
     // ---- Queue operations used by the fake spooler and engine ---------------
 
     public SimulatedJob Submit(string document, int totalPages)
@@ -98,6 +116,7 @@ public sealed class SimulatedPrinter
                 Status = NativeStatus.Spooling,
             };
             _jobs.Add(job);
+            _queueVersion++;
             return job;
         }
     }
@@ -105,6 +124,19 @@ public sealed class SimulatedPrinter
     public IReadOnlyList<SimulatedJob> Snapshot()
     {
         lock (_gate) return _jobs.Select(j => j.Clone()).ToList();
+    }
+
+    /// <summary>
+    /// The queue as the spooler lists it. Unlike <see cref="Snapshot"/>, this counts as the
+    /// queue having been observed, which is what <see cref="HasUnobservedQueueChange"/> tracks.
+    /// </summary>
+    public IReadOnlyList<SimulatedJob> ReadQueue()
+    {
+        lock (_gate)
+        {
+            _observedQueueVersion = _queueVersion;
+            return _jobs.Select(j => j.Clone()).ToList();
+        }
     }
 
     public bool Cancel(int jobId)
@@ -140,7 +172,11 @@ public sealed class SimulatedPrinter
             var settling = _jobs.FirstOrDefault(j => j.Status == NativeStatus.Printed);
             if (settling is not null)
             {
-                if (++settling.LingerSteps >= FinishedLingerAdvances) _jobs.Remove(settling);
+                if (++settling.LingerSteps >= FinishedLingerAdvances)
+                {
+                    _jobs.Remove(settling);
+                    _queueVersion++;
+                }
                 return;
             }
 
@@ -150,6 +186,7 @@ public sealed class SimulatedPrinter
             if (job.Status == NativeStatus.Spooling)
             {
                 job.Status = NativeStatus.Printing;
+                _queueVersion++;
                 return;
             }
 
@@ -179,6 +216,7 @@ public sealed class SimulatedPrinter
 
             job.PagesPrinted += step;
             TotalPagesPrinted += step;
+            _queueVersion++;
             QueueCounterUpdate(step);
 
             if (job.PagesPrinted >= job.TotalPages)

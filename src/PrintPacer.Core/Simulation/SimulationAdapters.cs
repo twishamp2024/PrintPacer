@@ -43,7 +43,7 @@ public sealed class SimulatedSpooler : ISpooler
         }
 
         querySucceeded = true;
-        return _printer.Snapshot().Select(j => new SpoolerJob
+        return _printer.ReadQueue().Select(j => new SpoolerJob
         {
             JobId = j.JobId,
             Document = j.Document,
