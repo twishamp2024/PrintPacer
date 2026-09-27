@@ -1,5 +1,6 @@
 using PrintPacer.Core.Billing;
 using PrintPacer.Core.Model;
+using PrintPacer.Core.Printing;
 
 namespace PrintPacer.Core.Engine;
 
@@ -14,7 +15,11 @@ public sealed record BatchSnapshot
     public required BatchState State { get; init; }
     public required string RangeLabel { get; init; }
 
+    /// <summary>Print units in the batch: pages for a plain job, sheets otherwise.</summary>
     public int PageCount => LastPage - FirstPage + 1;
+
+    /// <summary>Printed sides in the batch: what Windows counts as its pages.</summary>
+    public int Impressions { get; init; }
 
     public int PagesConfirmedPrinted { get; init; }
     public string? Note { get; init; }
@@ -50,6 +55,7 @@ public sealed record BatchSnapshot
             LastPage = batch.LastPage,
             State = batch.State,
             RangeLabel = batch.RangeLabel,
+            Impressions = batch.Impressions,
             PagesConfirmedPrinted = batch.PagesConfirmedPrinted,
             Note = batch.Note,
             AttemptCount = batch.Attempts.Count,
@@ -81,6 +87,25 @@ public sealed record JobSnapshot
     public required int PagesPerBatch { get; init; }
     public required int DelayMinutes { get; init; }
     public ColourMode ColourMode { get; init; }
+
+    /// <summary>Page selection, layout and sides the job prints with.</summary>
+    public PrintSettings PrintSettings { get; init; } = PrintSettings.Default;
+
+    /// <summary>What batches count: pages for a plain job, physical sheets otherwise.</summary>
+    public PrintUnit Unit { get; init; } = PrintUnit.Page;
+
+    /// <summary>Print units in the whole job.</summary>
+    public int UnitCount { get; init; }
+
+    /// <summary>Source pages that print after page selection.</summary>
+    public int SelectedPageCount { get; init; }
+
+    /// <summary>"50 of 100 pages (odd pages) on 25 sheets", from the job's plan.</summary>
+    public string SizeSummary { get; init; } = "";
+
+    public string UnitName(int count) => Unit == PrintUnit.Page
+        ? (count == 1 ? "page" : "pages")
+        : (count == 1 ? "sheet" : "sheets");
 
     public required JobState State { get; init; }
     public required int CurrentBatchNumber { get; init; }
@@ -124,13 +149,19 @@ public sealed record JobSnapshot
     public int PendingBatchCount => Batches.Count(b => b.State == BatchState.Pending);
 
     /// <summary>
-    /// Pages we believe have physically printed: whole batches that finished, plus any
-    /// partial count recorded for a batch that stopped part-way.
+    /// Units (pages, or sheets for a sheet-based job) we believe have physically printed: whole
+    /// batches that finished, plus any partial count recorded for a batch that stopped part-way.
     /// </summary>
     public int PagesDone => Batches.Sum(b =>
         b.State is BatchState.Completed or BatchState.Skipped ? b.PageCount : b.PagesConfirmedPrinted);
 
-    public static JobSnapshot From(PrintJob job) => new()
+    public static JobSnapshot From(PrintJob job)
+    {
+        var plan = job.TryGetPlan();
+        return From(job, plan);
+    }
+
+    private static JobSnapshot From(PrintJob job, PrintPlan? plan) => new()
     {
         Id = job.Id,
         FileName = job.FileName,
@@ -140,6 +171,11 @@ public sealed record JobSnapshot
         PagesPerBatch = job.PagesPerBatch,
         DelayMinutes = job.DelayMinutes,
         ColourMode = job.ColourMode,
+        PrintSettings = job.PrintSettings,
+        Unit = plan?.Unit ?? PrintUnit.Page,
+        UnitCount = plan?.UnitCount ?? job.TotalPages,
+        SelectedPageCount = plan?.SelectedPages.Count ?? job.TotalPages,
+        SizeSummary = plan?.DescribeSize() ?? $"{job.TotalPages} pages (print settings unreadable)",
         State = job.State,
         CurrentBatchNumber = job.CurrentBatchNumber,
         NextBatchDueUtc = job.NextBatchDueUtc,

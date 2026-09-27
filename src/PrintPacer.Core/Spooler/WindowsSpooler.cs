@@ -194,6 +194,7 @@ public sealed class WindowsSpooler : ISpooler
                         TotalPages = (int)j.TotalPages,
                         PagesPrinted = (int)j.PagesPrinted,
                         Monochrome = PrinterColour.ReadMonochrome(j.pDevMode),
+                        Duplex = PrinterSetupCheck.ReadDuplex(j.pDevMode),
                         Position = (int)j.Position,
                         SizeBytes = j.Size,
                         SubmittedUtc = ToDateTime(j.Submitted),

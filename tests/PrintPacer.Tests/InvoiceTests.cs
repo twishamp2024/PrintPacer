@@ -292,6 +292,17 @@ public class InvoiceTests
                 ALTER TABLE jobs DROP COLUMN colour_page_price;
                 ALTER TABLE jobs DROP COLUMN page_colour_map;
                 ALTER TABLE jobs DROP COLUMN invoice_printed_utc;
+                ALTER TABLE jobs DROP COLUMN page_selection;
+                ALTER TABLE jobs DROP COLUMN layout;
+                ALTER TABLE jobs DROP COLUMN duplex;
+                ALTER TABLE jobs DROP COLUMN paper;
+                ALTER TABLE jobs DROP COLUMN margin_mm;
+                ALTER TABLE jobs DROP COLUMN fold_gap_mm;
+                ALTER TABLE jobs DROP COLUMN scaling;
+                ALTER TABLE jobs DROP COLUMN booklet_binding;
+                ALTER TABLE jobs DROP COLUMN sheets_per_section;
+                ALTER TABLE jobs DROP COLUMN keep_back_cover;
+                ALTER TABLE jobs DROP COLUMN brochure_fold;
                 UPDATE schema_info SET version = 1;
                 """;
             command.ExecuteNonQuery();

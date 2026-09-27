@@ -77,8 +77,15 @@ public sealed class PdfiumPrintEngine : IPrintEngine
     {
         var started = DateTimeOffset.UtcNow;
 
-        if (request.FirstPage < 1 || request.LastPage < request.FirstPage)
+        if (request.Sides is null && (request.FirstPage < 1 || request.LastPage < request.FirstPage))
             return PrintResult.Failure($"Invalid page range {request.FirstPage}-{request.LastPage}.", started, true);
+
+        var sides = request.EffectiveSides;
+        if (sides.Count == 0)
+            return PrintResult.Failure("The batch has nothing to print.", started, true);
+
+        if (request.Imposition is null && sides.Any(s => s.Panels.Count != 1))
+            return PrintResult.Failure("An imposed batch arrived without its layout settings.", started, true);
 
         var dpi = Math.Clamp(request.RenderDpi, MinRenderDpi, MaxRenderDpi);
         var scale = dpi / 72.0;
@@ -108,11 +115,11 @@ public sealed class PdfiumPrintEngine : IPrintEngine
             {
                 reader = DocLib.Instance.GetDocReader(request.SourcePath, new PageDimensions(scale));
                 var total = reader.GetPageCount();
-                if (request.LastPage > total)
+                var outOfRange = sides.SelectMany(s => s.SourcePages).Where(p => p < 1 || p > total).ToList();
+                if (outOfRange.Count > 0)
                 {
                     return PrintResult.Failure(
-                        $"Page range {request.FirstPage}-{request.LastPage} exceeds the document's {total} pages.",
-                        started, true);
+                        $"Page {outOfRange.Max()} is outside the document's {total} pages.", started, true);
                 }
             }
 
@@ -124,7 +131,7 @@ public sealed class PdfiumPrintEngine : IPrintEngine
             var flags = RenderFlags.RenderForPrinting | RenderFlags.LimitImageCacheSize;
             if (blackAndWhite) flags |= RenderFlags.Grayscale;
 
-            var nextPage = request.FirstPage;
+            var nextSide = 0;
 
             using var document = new PrintDocument();
             document.PrinterSettings = settings;
@@ -143,6 +150,20 @@ public sealed class PdfiumPrintEngine : IPrintEngine
             // the driver does not declare the field, so for black and white, confirm that the
             // DEVMODE it is about to use really says monochrome.
             document.DefaultPageSettings.Color = !blackAndWhite;
+
+            // Sides, paper and orientation go into the same DEVMODE, and are confirmed the same
+            // way: by building it as Print() will and reading back what the driver kept. A
+            // booklet printed single-sided, or on portrait paper, is waste paper - so if the
+            // driver will not take the settings, nothing is sent at all.
+            var setup = PrinterSetupCheck.Apply(settings, document.DefaultPageSettings, request.Setup,
+                request.Imposition?.MarginMm);
+            if (setup.FirstBlocking is { } rejected)
+            {
+                Log.Warning("Not printing {Token}: {Problem}", request.DocumentToken, rejected.Message);
+                return PrintResult.Failure(rejected.Message, started, beforeAnyOutput: true) with { SetupRejected = true };
+            }
+
+            var setupWarning = setup.Issues.FirstOrDefault()?.Message;
 
             string? colourWarning = null;
             if (blackAndWhite)
@@ -163,7 +184,16 @@ public sealed class PdfiumPrintEngine : IPrintEngine
 
                 try
                 {
-                    DrawPage(e, reader!, nextPage - 1, flags, request);
+                    var side = sides[nextSide];
+                    if (request.Imposition is { } imposition)
+                    {
+                        DrawImposedSide(e, reader!, side, flags, request, imposition);
+                    }
+                    else if (side.Panels[0] is { } page)
+                    {
+                        DrawPage(e, reader!, page - 1, flags, request);
+                    }
+
                     anythingDrawn = true;
                     pagesRendered++;
                 }
@@ -176,20 +206,26 @@ public sealed class PdfiumPrintEngine : IPrintEngine
                     return;
                 }
 
-                nextPage++;
-                e.HasMorePages = nextPage <= request.LastPage;
+                nextSide++;
+                e.HasMorePages = nextSide < sides.Count;
             };
 
-            Log.Information("Spooling {Token}: pages {First}-{Last} to {Printer} at {Dpi} dpi in {Mode}",
-                request.DocumentToken, request.FirstPage, request.LastPage, request.PrinterName, dpi,
-                request.ColourMode.Describe().ToLowerInvariant());
+            Log.Information("Spooling {Token}: units {First}-{Last} ({Sides} sides) to {Printer} at {Dpi} dpi in {Mode}, " +
+                            "{Duplex}, paper {Paper}{Orientation}",
+                request.DocumentToken, request.FirstPage, request.LastPage, sides.Count, request.PrinterName, dpi,
+                request.ColourMode.Describe().ToLowerInvariant(), request.Setup.Duplex.Describe().ToLowerInvariant(),
+                setup.PaperName ?? "default", request.Setup.Landscape == true ? ", landscape" : "");
 
             document.Print();
 
             if (renderFailure is not null)
             {
+                var where = nextSide < sides.Count
+                    ? $"sheet {sides[nextSide].Sheet} ({sides[nextSide].Face.ToString().ToLowerInvariant()})"
+                    : "the last side";
                 return PrintResult.Failure(
-                    $"Rendering failed on page {nextPage}: {renderFailure.Message}", started, !anythingDrawn);
+                    $"Rendering failed on {where}: {renderFailure.Message}", started, !anythingDrawn)
+                    with { SetupRejected = renderFailure is SetupRejectedException && !anythingDrawn };
             }
 
             if (ct.IsCancellationRequested)
@@ -206,6 +242,7 @@ public sealed class PdfiumPrintEngine : IPrintEngine
                 Spooled = true,
                 PagesRendered = pagesRendered,
                 ColourWarning = colourWarning,
+                SetupWarning = setupWarning,
                 StartedUtc = started,
                 FinishedUtc = DateTimeOffset.UtcNow,
             };
@@ -228,8 +265,10 @@ public sealed class PdfiumPrintEngine : IPrintEngine
         }
     }
 
-    private static void DrawPage(PrintPageEventArgs e, IDocReader reader, int pageIndex,
-        RenderFlags flags, PrintRequest request)
+    /// <summary>A page rasterised by PDFium and flattened onto white, ready to draw.</summary>
+    private sealed record RenderedPage(byte[] Bgra, int PixelWidth, int PixelHeight, long RenderMs, long FlattenMs);
+
+    private static RenderedPage RenderPage(IDocReader reader, int pageIndex, RenderFlags flags)
     {
         byte[] bgra;
         int pixelWidth, pixelHeight;
@@ -237,6 +276,8 @@ public sealed class PdfiumPrintEngine : IPrintEngine
         var renderWatch = System.Diagnostics.Stopwatch.StartNew();
         lock (PdfService.PdfiumLock)
         {
+            // PDFium applies the page's /Rotate and renders its crop box, so the size and image
+            // here are the page as a viewer shows it.
             using var page = reader.GetPageReader(pageIndex);
             pixelWidth = page.GetPageWidth();
             pixelHeight = page.GetPageHeight();
@@ -251,6 +292,27 @@ public sealed class PdfiumPrintEngine : IPrintEngine
         if (bgra.LongLength < expected)
             throw new InvalidOperationException(
                 $"Page {pageIndex + 1} rendered {bgra.LongLength} bytes, expected {expected}.");
+
+        // PDFium hands back straight (non-premultiplied) BGRA on a fully transparent
+        // background. Leaving the alpha channel for GDI+ to resolve would make the result
+        // depend on how each printer driver handles alpha on its device context - and with
+        // SourceCopy it would emit black pages, because an unpainted pixel is 0,0,0,0.
+        // Flattening onto white here makes the bitmap opaque and the outcome identical on
+        // every driver. It is also faster than asking GDI+ to alpha-blend 35 MB per page.
+        var flattenWatch = System.Diagnostics.Stopwatch.StartNew();
+        FlattenOntoWhite(bgra, (long)pixelWidth * pixelHeight);
+        flattenWatch.Stop();
+
+        return new RenderedPage(bgra, pixelWidth, pixelHeight, renderWatch.ElapsedMilliseconds,
+            flattenWatch.ElapsedMilliseconds);
+    }
+
+    private static void DrawPage(PrintPageEventArgs e, IDocReader reader, int pageIndex,
+        RenderFlags flags, PrintRequest request)
+    {
+        var rendered = RenderPage(reader, pageIndex, flags);
+        var pixelWidth = rendered.PixelWidth;
+        var pixelHeight = rendered.PixelHeight;
 
         var graphics = e.Graphics ?? throw new InvalidOperationException("No graphics context for the page.");
 
@@ -282,32 +344,15 @@ public sealed class PdfiumPrintEngine : IPrintEngine
             destination = new RectangleF((availableWidth - width) / 2f, (availableHeight - height) / 2f, width, height);
         }
 
-        // PDFium hands back straight (non-premultiplied) BGRA on a fully transparent
-        // background. Leaving the alpha channel for GDI+ to resolve would make the result
-        // depend on how each printer driver handles alpha on its device context - and with
-        // SourceCopy it would emit black pages, because an unpainted pixel is 0,0,0,0.
-        // Flattening onto white here makes the bitmap opaque and the outcome identical on
-        // every driver. It is also faster than asking GDI+ to alpha-blend 35 MB per page.
-        var flattenWatch = System.Diagnostics.Stopwatch.StartNew();
-        FlattenOntoWhite(bgra, (long)pixelWidth * pixelHeight);
-        flattenWatch.Stop();
-
         var drawWatch = System.Diagnostics.Stopwatch.StartNew();
-        var handle = GCHandle.Alloc(bgra, GCHandleType.Pinned);
+        var handle = GCHandle.Alloc(rendered.Bgra, GCHandleType.Pinned);
         try
         {
             // Format32bppRgb tells GDI+ to ignore the (now meaningless) alpha byte.
             using var bitmap = new Bitmap(pixelWidth, pixelHeight, pixelWidth * 4,
                 PixelFormat.Format32bppRgb, handle.AddrOfPinnedObject());
 
-            // The source is already rasterised at the requested dpi. High-quality bicubic
-            // resampling of a 35 MB bitmap costs seconds per page and buys nothing visible
-            // on an inkjet, so the cheaper filter is the right trade here.
-            graphics.InterpolationMode = InterpolationMode.Bilinear;
-            graphics.PixelOffsetMode = PixelOffsetMode.Half;
-            graphics.SmoothingMode = SmoothingMode.None;
-            graphics.CompositingQuality = CompositingQuality.HighSpeed;
-            graphics.CompositingMode = CompositingMode.SourceCopy;
+            PrepareGraphics(graphics);
 
             if (rotate)
             {
@@ -337,8 +382,87 @@ public sealed class PdfiumPrintEngine : IPrintEngine
         drawWatch.Stop();
 
         Log.Debug("page {Page}: render {Render} ms, flatten {Flatten} ms, draw {Draw} ms, {W}x{H} px",
-            pageIndex + 1, renderWatch.ElapsedMilliseconds, flattenWatch.ElapsedMilliseconds,
+            pageIndex + 1, rendered.RenderMs, rendered.FlattenMs,
             drawWatch.ElapsedMilliseconds, pixelWidth, pixelHeight);
+    }
+
+    private static void PrepareGraphics(Graphics graphics)
+    {
+        // The source is already rasterised at the requested dpi. High-quality bicubic
+        // resampling of a 35 MB bitmap costs seconds per page and buys nothing visible
+        // on an inkjet, so the cheaper filter is the right trade here.
+        graphics.InterpolationMode = InterpolationMode.Bilinear;
+        graphics.PixelOffsetMode = PixelOffsetMode.Half;
+        graphics.SmoothingMode = SmoothingMode.None;
+        graphics.CompositingQuality = CompositingQuality.HighSpeed;
+        graphics.CompositingMode = CompositingMode.SourceCopy;
+    }
+
+    /// <summary>
+    /// Draws one side of an imposed sheet: each panel's page, placed by
+    /// <see cref="ImpositionGeometry"/> on the physical sheet.
+    ///
+    /// Positions are worked out on the whole sheet - the fold must be at the true middle of the
+    /// paper, not the middle of the printable area - using the size and unprintable offset the
+    /// printer's own device context reports, which are the ones in effect after the driver has
+    /// applied landscape orientation. Each page is rasterised once, straight from the PDF, at
+    /// the job's resolution; nothing is rasterised twice or rendered from an intermediate copy.
+    /// </summary>
+    private static void DrawImposedSide(PrintPageEventArgs e, IDocReader reader, PrintSide side,
+        RenderFlags flags, PrintRequest request, ImpositionOptions imposition)
+    {
+        var graphics = e.Graphics ?? throw new InvalidOperationException("No graphics context for the page.");
+        var sheet = SheetGeometry.Read(graphics, e.PageBounds);
+
+        if (request.Setup.Landscape == true && sheet.Size.Width < sheet.Size.Height)
+        {
+            // Laying two portrait pages across a portrait sheet would squeeze them into
+            // slivers. The check before printing makes this very unlikely; if it happens,
+            // stop before anything is drawn.
+            throw new SetupRejectedException(
+                $"The driver for \"{request.PrinterName}\" printed the sheet in portrait although landscape was requested.");
+        }
+
+        var boxes = ImpositionGeometry.PanelBoxes(sheet.Size, side.Panels.Count, imposition.MarginMm, imposition.FoldGapMm);
+
+        PrepareGraphics(graphics);
+        var state = graphics.Save();
+        try
+        {
+            // Graphics coordinates start at the printable area; move the origin to the corner
+            // of the paper so every rectangle below is in true sheet coordinates.
+            graphics.TranslateTransform(-sheet.PrintableOffset.X, -sheet.PrintableOffset.Y);
+
+            for (var panel = 0; panel < side.Panels.Count; panel++)
+            {
+                if (side.Panels[panel] is not { } pageNumber) continue;
+
+                var rendered = RenderPage(reader, pageNumber - 1, flags);
+                // The page's own size in hundredths of an inch, from the resolution it was rendered at.
+                var renderDpi = Math.Clamp(request.RenderDpi, MinRenderDpi, MaxRenderDpi);
+                var natural = new SizeF(rendered.PixelWidth * 100f / renderDpi, rendered.PixelHeight * 100f / renderDpi);
+                var destination = ImpositionGeometry.Place(boxes[panel], natural, imposition.Scaling);
+
+                var handle = GCHandle.Alloc(rendered.Bgra, GCHandleType.Pinned);
+                try
+                {
+                    using var bitmap = new Bitmap(rendered.PixelWidth, rendered.PixelHeight, rendered.PixelWidth * 4,
+                        PixelFormat.Format32bppRgb, handle.AddrOfPinnedObject());
+                    graphics.DrawImage(bitmap, destination);
+                }
+                finally
+                {
+                    handle.Free();
+                }
+
+                Log.Debug("sheet {Sheet} {Face} panel {Panel}: page {Page} at {Rect}", side.Sheet, side.Face,
+                    panel + 1, pageNumber, destination);
+            }
+        }
+        finally
+        {
+            graphics.Restore(state);
+        }
     }
 
     /// <summary>
@@ -372,4 +496,55 @@ public sealed class PdfiumPrintEngine : IPrintEngine
             }
         }
     }
+}
+
+/// <summary>Thrown from inside a page callback when the driver did not apply a required setting.</summary>
+internal sealed class SetupRejectedException : Exception
+{
+    public SetupRejectedException(string message) : base(message) { }
+}
+
+/// <summary>
+/// The physical sheet as the printer's device context sees it, in hundredths of an inch: its
+/// size, and where the printable area - the origin of the page's graphics - starts on it.
+/// </summary>
+internal readonly record struct SheetGeometry(SizeF Size, PointF PrintableOffset)
+{
+    private const int PHYSICALWIDTH = 110;
+    private const int PHYSICALHEIGHT = 111;
+    private const int PHYSICALOFFSETX = 112;
+    private const int PHYSICALOFFSETY = 113;
+    private const int LOGPIXELSX = 88;
+    private const int LOGPIXELSY = 90;
+
+    public static SheetGeometry Read(Graphics graphics, Rectangle pageBounds)
+    {
+        var hdc = graphics.GetHdc();
+        try
+        {
+            var dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
+            var dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
+            var width = GetDeviceCaps(hdc, PHYSICALWIDTH);
+            var height = GetDeviceCaps(hdc, PHYSICALHEIGHT);
+
+            if (dpiX > 0 && dpiY > 0 && width > 0 && height > 0)
+            {
+                return new SheetGeometry(
+                    new SizeF(width * 100f / dpiX, height * 100f / dpiY),
+                    new PointF(GetDeviceCaps(hdc, PHYSICALOFFSETX) * 100f / dpiX,
+                        GetDeviceCaps(hdc, PHYSICALOFFSETY) * 100f / dpiY));
+            }
+        }
+        finally
+        {
+            graphics.ReleaseHdc(hdc);
+        }
+
+        // A device context that does not describe itself (a preview, some virtual printers):
+        // fall back to what .NET reports, with the origin at the paper's corner.
+        return new SheetGeometry(new SizeF(pageBounds.Width, pageBounds.Height), PointF.Empty);
+    }
+
+    [DllImport("gdi32.dll")]
+    private static extern int GetDeviceCaps(IntPtr hdc, int index);
 }

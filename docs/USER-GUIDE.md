@@ -24,13 +24,106 @@ where the file has them — the title and author.
 If the file is not a readable PDF, you are told why rather than being left with
 a broken job: *"This file does not start with a PDF header, so it is not a PDF."*
 
-### 2. Choose the printer
+### 2. Print settings: which pages, what layout, one or both sides
+
+For an ordinary job there is nothing to do here: **All pages**, **Normal**,
+**Single-sided** is how PrintPacer has always printed, and every new job starts
+that way. The three choices are made in order, because each one shapes the next:
+
+| Choice | Options |
+|---|---|
+| **Pages** | All pages · Odd pages only (1, 3, 5 …) · Even pages only (2, 4, 6 …) |
+| **Layout** | Normal (one page per side) · Booklet · Brochure |
+| **Sides** | Single-sided · Double-sided, then **Flip on**: long edge (turn like a book) or short edge (flip up like a notepad) |
+
+Only the pages you select are printed — odd pages means the even pages never
+reach the printer, and no blank pages are added in their place. Pages are
+selected *before* the layout is worked out, so a booklet of odd pages is a
+booklet made from pages 1, 3, 5 …
+
+**Double-sided** is set on the printer itself for every batch — the Windows
+setting the driver prints with — not just shown on screen. PrintPacer asks the
+driver before the job starts and again before each batch, and reads the setting
+back from the Windows queue as each batch arrives (*"Windows confirms batch 2 is
+set to double-sided, flip on long edge."*). If the printer cannot print on both
+sides, the setup screen says so in red under the print settings and **START
+PRINTING** stays greyed out; nothing is ever printed single-sided in place of
+double-sided.
+
+> Some printers without a duplex unit (many home inkjets) still offer
+> double-sided printing: their driver prints the fronts, then asks someone to
+> turn the stack over. That works, but not while you are asleep.
+
+#### Booklet
+
+Pages are reordered and printed two to a side on landscape sheets, so that the
+printed sheets, nested and folded down the middle, read in order. For eight
+pages the sheets are:
+
+```
+Sheet 1   front  8 | 1    back  2 | 7
+Sheet 2   front  6 | 3    back  4 | 5
+```
+
+You never have to work this out: the **Sheets** panel under the settings shows
+the first few sheets for your document, and blank pages are added automatically
+when the page count is not a multiple of four (shown as `·`).
+
+| Option | What it does |
+|---|---|
+| **Binding** | Left for left-to-right text; Right for right-to-left text (every side is mirrored). |
+| **Folded in** | All sheets in one booklet, or sections of 1–12 sheets. Thick booklets are easier to fold in sections: fold each section on its own and stack them in order. |
+| **Keep the last page as the back cover** | Puts any blank pages just before the last page, instead of after it. |
+| **Paper** | The sheet size. Must be one the printer offers; the setup screen checks. |
+| **Margin** | Blank space at the edges of the sheet, in mm. |
+| **Space at fold** | Blank space across the fold, in mm (half on each side of it). |
+| **Page size** | *Fit each page to its panel*, or *Actual size* — printed at 100 % unless too big. |
+
+A booklet is always double-sided, flipped on the short edge — which is right for a
+landscape sheet folded down the middle. If a test sheet comes out with the backs
+upside down, your driver interprets the flip the other way round: change **Flip
+on** to long edge.
+
+Sheets print outermost first: sheet 1 carries the front and back covers. Keep the
+sheets in the order they came out, nest each one inside the one before, and fold.
+
+#### Brochure
+
+Each sheet is **one folded leaflet**, made from the next few pages of the PDF,
+which are its panels. Unlike a booklet, sheets are never nested: an 8-page PDF as
+a bi-fold brochure is two separate leaflets.
+
+| Fold | Panels, as pages of the PDF | Printed |
+|---|---|---|
+| **Bi-fold** (2 panels per side) | 1 front cover · 2, 3 inside left and right · 4 back cover | outside `4 \| 1`, inside `2 \| 3` |
+| **Tri-fold** (3 panels per side, letter fold) | 1 front cover · 2 flap that folds in · 3, 4, 5 inside, left to right · 6 back cover | outside `2 \| 6 \| 1`, inside `3 \| 4 \| 5` |
+
+For a tri-fold, fold the right-hand inside panel in first, then close the front
+cover over it. Paper, margin, space at each fold and page size work as for a
+booklet. If your PDF already has each whole side of the brochure laid out (two
+landscape pages, outside and inside), it does not need imposing: print it
+**Normal**, **Double-sided**, flip on short edge.
+
+#### Preview layout as PDF…
+
+Draws the first sheets exactly as they will be printed — the same code that prints
+them — into a PDF using *Microsoft Print to PDF*, and opens it. Fronts and backs
+appear as consecutive pages. Nothing is sent to your printer.
+
+#### What is set where
+
+The layout (which page goes where, margins, scaling) is done by PrintPacer and
+works on any printer. **Sides**, **paper** and **landscape orientation** are
+printer settings: they depend on what the printer's driver accepts, which is why
+PrintPacer checks them with the driver and shows the answer under the settings.
+
+### 3. Choose the printer
 
 Defaults to your Windows default printer. The line underneath shows the driver
 and port, which is a quick way to confirm you have the right one when two
 printers have similar names.
 
-### 3. Print mode
+### 4. Print mode
 
 **Colour** (the default) prints pages as they are. **Black & white** prints every
 batch of the job in black and white: PrintPacer asks the printer's driver to use
@@ -51,7 +144,7 @@ The line underneath says what the chosen printer will do:
 The choice is made per job and is remembered as the starting point for the next
 one; the dashboard shows the mode of the job that is running.
 
-### 4. Pages per batch
+### 5. Pages per batch
 
 **Start with 50.** If your printer still stalls, come down to 30 or 25.
 
@@ -59,7 +152,16 @@ The number is a ceiling, not a requirement — a 203-page document at 50 per bat
 gives four batches of 50 and one of 3. Setting it larger than the document just
 gives you one batch.
 
-### 5. Rest between batches
+With **odd** or **even pages**, it counts the pages that print: 100 pages, odd
+only, 10 per batch, is five batches of ten odd pages.
+
+For anything **double-sided** — including every booklet and brochure — the box
+is labelled **Sheets per batch**, and counts sheets of paper. Batches then always
+hold whole sheets, both sides of each, so a sheet's front and back, or the two
+halves of a booklet spread, can never end up in different print jobs. The hint
+under the box says how many pages a sheet carries.
+
+### 6. Rest between batches
 
 **Start with 60 minutes.** This is the number that actually fixes the problem;
 everything else is bookkeeping.
@@ -67,11 +169,11 @@ everything else is bookkeeping.
 `0` sends the next batch as soon as the previous one is verified, which is useful
 for testing but defeats the purpose in normal use.
 
-### 6. Start later (optional)
+### 7. Start later (optional)
 
 Tick **Start later** and give a date and a 24-hour time to begin at, say, 23:30.
 
-### 7. Print an invoice (optional)
+### 8. Print an invoice (optional)
 
 Tick **Print an invoice when the job finishes** and enter the price of a black &
 white page and of a colour page. Amounts use your Windows region's currency.
@@ -109,21 +211,38 @@ If PrintPacer stops while the invoice is being sent, it does not resend it by
 itself on the next start — check the tray, and press **Print invoice again** if
 it is not there.
 
-### 8. Read "What will happen"
+### 9. Read "What will happen"
 
 Before anything is sent, this panel spells out the actual plan:
 
 ```
-4 separate print jobs, 60 minute(s) apart, every one in black & white.
+Pages       200 pages
+Layout      Normal, one page per side, on the printer's paper
+Sides       Single-sided
+
+4 separate print jobs of up to 50 pages, 60 minute(s) apart, every one in black & white.
     Batch 1:  Pages 1–50          Sat 23:00
     Batch 2:  Pages 51–100        Sun 00:00
     Batch 3:  Pages 101–150       Sun 01:00
     Batch 4:  Pages 151–200       Sun 02:00
 ```
 
+and for a booklet:
+
+```
+Pages       14 pages on 4 sheets, 2 blank pages added
+Layout      Booklet, bound on the left, 2 pages per side, A4 landscape
+Sides       Double-sided, flip on short edge
+Spacing     6 mm margins, 12 mm at each fold, fit to panel, pages at about 65%
+
+2 separate print jobs of up to 2 sheets, 60 minute(s) apart, every one in colour.
+    Batch 1:  Sheets 1–2 · pages 1–4, 13–14   Sat 23:00
+    Batch 2:  Sheets 3–4 · pages 5–12         Sun 00:00
+```
+
 If that is not what you expected, fix it now.
 
-### 9. Press START PRINTING
+### 10. Press START PRINTING
 
 ---
 

@@ -119,10 +119,12 @@ Not handled:
   password prompt.
 - **Corrupt or truncated files.** Rejected at load rather than failing halfway
   through batch 3.
-- **Page selection.** The whole document is printed. There is no "print pages
-  20–80 only".
-- **Duplex, stapling, tray selection, N-up.** The printer's defaults are used.
-  Set them in the Windows printer preferences beforehand.
+- **Page ranges.** All pages, odd pages or even pages - but not "pages 20–80
+  only".
+- **Stapling, hole punching, tray selection, plain N-up.** The printer's defaults
+  are used; set them in the Windows printer preferences beforehand. Double-sided
+  printing, and paper and orientation for booklets and brochures, are set by
+  PrintPacer (see §13).
 - **Copies.** Fixed at one, deliberately — multiple copies would multiply any
   duplicate-printing mistake.
 
@@ -180,8 +182,10 @@ Honest list:
 Considered and deliberately left out of this version:
 
 - Multi-job queue management in the interface (see §8)
-- Printing a page range rather than the whole document
-- Duplex and finishing options
+- Printing an arbitrary page range (odd and even pages are supported)
+- Finishing options (stapling, punching), paper tray selection
+- Turning the paper over by hand under PrintPacer's control ("manual duplex") -
+  a driver that does this itself still works, with someone present
 - Restarting the Print Spooler service (needs elevation; rarely the real fix)
 - Email or phone notification when a job finishes
 - Scheduled recurring jobs
@@ -206,3 +210,70 @@ Considered and deliberately left out of this version:
 - **No telemetry**, no analytics, no update check, no cloud service.
 - Data lives in `%LOCALAPPDATA%\PrintPacer` and is left there on uninstall so
   logs remain available. Remove it by hand, or uninstall with `-RemoveData`.
+
+---
+
+## 13. Double-sided, booklets and brochures
+
+**Double-sided is as reliable as the driver's word for it.** PrintPacer sets
+double-sided in the job's DEVMODE, confirms the driver kept it before each batch,
+and reads it back from the queued job in Windows. That proves Windows asked the
+printer for both sides. It cannot prove the paper actually turned over - that is
+between the driver and the hardware.
+
+**Some "double-sided" printers need a person.** A printer without a duplex unit
+may still offer double-sided printing through its driver, which prints the
+fronts and then asks someone to turn the stack over. PrintPacer cannot tell this
+apart from automatic duplex, so the setup screen warns about it whenever
+double-sided is chosen. Such a batch will sit waiting overnight.
+
+**Which way is "short edge"?** PrintPacer uses the standard meaning: short-edge
+binding (`DMDUP_HORIZONTAL`) turns the physical sheet over on its short edge,
+which is right for a landscape sheet folded down the middle. A driver that
+interprets it relative to the page orientation will print the backs upside down;
+switching **Flip on** to long edge corrects that. Do a one-sheet test on a new
+printer before an overnight booklet.
+
+**The page counter counts sides.** A double-sided batch of 10 sheets is
+verified against 20 printed sides, because an impression is one side. A printer
+whose counter counts sheets instead will show a mismatch, which PrintPacer
+reports as *needs checking* - never as a reason to resend. A part-way count on a
+double-sided batch offers no automatic resume point: 7 sides could be 7 fronts,
+so the sheets themselves must be checked.
+
+**Booklets.**
+- No creep compensation. In a thick booklet the inner sheets stick out when
+  folded, and trimming would eat into their outer margin. Fold thick booklets in
+  sections (the **Folded in** option), or allow a larger margin.
+- No crop or fold marks are printed.
+- Left and right binding only; no top (calendar-style) binding.
+
+**Brochures.**
+- Bi-fold and letter-fold tri-fold only. Z-fold, gate fold and roll folds with
+  more panels are not implemented.
+- All panels are the same width. Commercial tri-folds often make the fold-in
+  panel a few millimetres narrower; with equal panels, fold carefully or use a
+  slightly larger space at the folds.
+- The PDF's pages must be the panels, in the documented order. A PDF laid out as
+  whole sides (outside and inside spreads) needs no imposition: print it Normal,
+  double-sided, short edge.
+
+**Placement.**
+- Pages keep their orientation in a booklet or brochure; a landscape page in a
+  portrait panel is scaled down to fit, not turned.
+- Paper size is chosen for booklets and brochures. Normal jobs use the printer's
+  default paper, as before.
+- The margin is measured from the edge of the paper. If it is smaller than the
+  printer's unprintable edge, the setup screen warns that the outer edge of the
+  pages may be cut off.
+
+**Rendering.** Imposed pages go through the same rendering as every other page
+(§6): each page is rasterised once, directly from the PDF, at the job's resolution,
+and scaled into its panel. There is no intermediate PDF and no second
+rasterisation, but it is not vector imposition either - which, as in §6, costs
+nothing on a raster inkjet and some sharpness on a PostScript printer.
+
+**One setting per job.** Print settings are fixed when the job is created; a job
+cannot be switched from single- to double-sided halfway through. If a printer
+turns out not to accept a setting, the job waits with every batch and setting
+intact; to print it differently, cancel it and set up a new one.

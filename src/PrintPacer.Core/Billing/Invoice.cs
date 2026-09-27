@@ -86,6 +86,10 @@ public static class PageColourMap
 /// Built from the job's own batch records, so a page is only ever charged if the engine
 /// believes it is on paper. Pages from a batch the user confirmed or skipped as already
 /// printed count too, matching the "all N pages printed" the job reports on completion.
+///
+/// A page is a page of the document, however it was laid out: a booklet sheet carrying four
+/// pages charges four, blank padding charges nothing, and pages left out by an odd- or
+/// even-page selection were never printed and are never charged.
 /// </summary>
 public sealed record Invoice
 {
@@ -122,7 +126,7 @@ public sealed record Invoice
     {
         var printed = job.Batches
             .Where(b => b.State is BatchState.Completed or BatchState.Skipped)
-            .SelectMany(b => Enumerable.Range(b.FirstPage, b.PageCount))
+            .SelectMany(b => b.SourcePages)
             .Distinct()
             .Order()
             .ToList();

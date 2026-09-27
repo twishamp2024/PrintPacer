@@ -1,4 +1,5 @@
 using PrintPacer.Core.Billing;
+using PrintPacer.Core.Printing;
 
 namespace PrintPacer.Core.Model;
 
@@ -31,6 +32,12 @@ public sealed class PrintJob
 
     // ---- Configuration -----------------------------------------------------
     public required string PrinterName { get; set; }
+
+    /// <summary>
+    /// Print units per batch (see <see cref="PrintPlan.Unit"/>): pages for a plain single-sided
+    /// job, as it has always been, and physical sheets for everything else. The database column
+    /// keeps its old name.
+    /// </summary>
     public int PagesPerBatch { get; init; }
     public int DelayMinutes { get; init; }
     public StartMode StartMode { get; init; }
@@ -43,6 +50,37 @@ public sealed class PrintJob
     public ColourMode ColourMode { get; init; } = ColourMode.Colour;
     public bool FitToPrintableArea { get; init; } = true;
     public bool AutoRotate { get; init; } = true;
+
+    /// <summary>
+    /// Page selection, layout and sides. Jobs stored before these existed read back as the
+    /// defaults - all pages, normal layout, single-sided - which is exactly how they printed.
+    /// </summary>
+    public PrintSettings PrintSettings { get; init; } = PrintSettings.Default;
+
+    private PrintPlan? _plan;
+
+    /// <summary>
+    /// Which sheet carries which pages, derived from <see cref="PrintSettings"/> and the page
+    /// count. Batches are ranges of this plan's units.
+    /// </summary>
+    public PrintPlan Plan => _plan ??= PrintPlan.Build(PrintSettings, TotalPages);
+
+    /// <summary>
+    /// The plan, or null when the stored settings cannot make one (only possible for a damaged
+    /// database row). For displays and reports, which must keep working; printing uses
+    /// <see cref="Plan"/> and refuses such a job outright.
+    /// </summary>
+    public PrintPlan? TryGetPlan()
+    {
+        try { return Plan; }
+        catch (ArgumentException) { return null; }
+    }
+
+    /// <summary>Gives every batch the plan its unit numbers refer to. Called when a job is created or loaded.</summary>
+    public void AttachPlanToBatches()
+    {
+        foreach (var batch in Batches) batch.Plan = Plan;
+    }
 
     // ---- Invoice -----------------------------------------------------------
     public InvoiceState InvoiceState { get; set; } = InvoiceState.NotRequested;
@@ -88,6 +126,7 @@ public sealed class PrintJob
     // ---- Derived -----------------------------------------------------------
     public int BatchCount => Batches.Count;
 
+    /// <summary>Print units finished or accepted, in the unit the batches count.</summary>
     public int PagesAccountedFor => Batches
         .Where(b => b.State is BatchState.Completed or BatchState.Skipped)
         .Sum(b => b.PageCount);
@@ -117,6 +156,17 @@ public sealed class PrintJob
     /// yields 5 (the last containing a single page).
     /// </summary>
     public static List<Batch> PlanBatches(string jobId, int totalPages, int pagesPerBatch)
+        => PlanBatches(jobId, totalPages, pagesPerBatch, null);
+
+    /// <summary>
+    /// Divides a job's plan into batches of whole units. Page selection and imposition have
+    /// already happened by now, so for a booklet or brochure the units are sheets, and a batch
+    /// always holds both sides of every sheet in it.
+    /// </summary>
+    public static List<Batch> PlanBatches(string jobId, PrintPlan plan, int unitsPerBatch)
+        => PlanBatches(jobId, plan.UnitCount, unitsPerBatch, plan);
+
+    private static List<Batch> PlanBatches(string jobId, int totalPages, int pagesPerBatch, PrintPlan? plan)
     {
         if (totalPages <= 0) throw new ArgumentOutOfRangeException(nameof(totalPages));
         if (pagesPerBatch <= 0) throw new ArgumentOutOfRangeException(nameof(pagesPerBatch));
@@ -133,6 +183,7 @@ public sealed class PrintJob
                 FirstPage = first,
                 LastPage = last,
                 State = BatchState.Pending,
+                Plan = plan,
             });
         }
         return batches;

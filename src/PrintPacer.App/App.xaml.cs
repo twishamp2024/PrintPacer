@@ -60,6 +60,11 @@ public partial class App : Application
             return;
         }
 
+        // --data-dir=<folder> keeps the job database, settings and logs somewhere else: for trying
+        // a build without touching - or resuming - the jobs of the copy that is in real use.
+        if (e.Args.FirstOrDefault(a => a.StartsWith("--data-dir=", StringComparison.OrdinalIgnoreCase)) is { } dataDir)
+            AppPaths.OverrideRoot(Path.GetFullPath(dataDir["--data-dir=".Length..].Trim('"')));
+
         AppPaths.EnsureCreated();
 
         var settingsStore = new SettingsStore();

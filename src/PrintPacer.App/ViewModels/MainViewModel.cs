@@ -60,6 +60,18 @@ public sealed class MainViewModel : ObservableObject
         _blackWhitePrice = FormatPrice(settings.BlackWhitePagePrice);
         _colourPrice = FormatPrice(settings.ColourPagePrice);
 
+        // Page selection, layout and sides always start plain; the details of the last booklet
+        // or brochure are offered again.
+        var layout = settings.LayoutDefaults ?? PrintSettings.Default;
+        _paper = layout.Paper;
+        _marginMm = FormatMm(layout.MarginMm);
+        _foldGapMm = FormatMm(layout.FoldGapMm);
+        _scaling = layout.Scaling;
+        _binding = layout.Binding;
+        _sheetsPerSection = layout.SheetsPerSignature;
+        _keepBackCover = layout.KeepLastPageAsBackCover;
+        _fold = layout.Fold;
+
         BrowseCommand = new RelayCommand(Browse);
         StartCommand = new RelayCommand(Start, () => CanStart);
         ClearDocumentCommand = new RelayCommand(() => Document = null);
@@ -74,6 +86,7 @@ public sealed class MainViewModel : ObservableObject
         RefreshPrintersCommand = new RelayCommand(RefreshPrinters);
         CancelQueuedBatchCommand = new RelayCommand(() => WithJob(j => _engine.CancelCurrentSpoolerJob(j.Id)));
         PrintInvoiceCommand = new RelayCommand(PrintInvoiceNow);
+        PreviewLayoutCommand = new RelayCommand(PreviewLayout, () => CanPreviewLayout);
 
         ConfirmPrintedCommand = new RelayCommand(p => WithJob(j =>
         {
@@ -131,6 +144,7 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand RetryBatchCommand { get; }
     public RelayCommand CancelQueuedBatchCommand { get; }
     public RelayCommand PrintInvoiceCommand { get; }
+    public RelayCommand PreviewLayoutCommand { get; }
 
     // ---- Setup screen --------------------------------------------------------
 
@@ -145,7 +159,7 @@ public sealed class MainViewModel : ObservableObject
             if (!Set(ref _selectedPrinter, value)) return;
             Raise(nameof(PrinterHint));
             RefreshColourModeNote();
-            RefreshCanStart();
+            RefreshPrintSettings();
             if (value is not null)
             {
                 Settings.LastPrinterName = value;
@@ -171,7 +185,7 @@ public sealed class MainViewModel : ObservableObject
                 Raise(name);
             }
             RestartColourCheck();
-            RefreshCanStart();
+            RefreshPrintSettings();
         }
     }
 
@@ -323,6 +337,500 @@ public sealed class MainViewModel : ObservableObject
         });
     }
 
+    // ---- Print settings: what to print, and how it goes on the paper -----------------------
+    //
+    // The first stages of the pipeline. Page selection and layout decide which sheets exist;
+    // only then does the batch size divide those sheets into print jobs.
+
+    /// <summary>An entry in one of the print-settings lists.</summary>
+    public sealed record Choice<T>(T Value, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    public IReadOnlyList<Choice<PageSelection>> PageSelections { get; } = new[]
+    {
+        new Choice<PageSelection>(PageSelection.AllPages, "All pages"),
+        new Choice<PageSelection>(PageSelection.OddPages, "Odd pages only (1, 3, 5 …)"),
+        new Choice<PageSelection>(PageSelection.EvenPages, "Even pages only (2, 4, 6 …)"),
+    };
+
+    public IReadOnlyList<Choice<PrintLayout>> Layouts { get; } = new[]
+    {
+        new Choice<PrintLayout>(PrintLayout.Normal, "Normal: one page per side"),
+        new Choice<PrintLayout>(PrintLayout.Booklet, "Booklet: fold and nest the sheets"),
+        new Choice<PrintLayout>(PrintLayout.Brochure, "Brochure: folded leaflets"),
+    };
+
+    public IReadOnlyList<Choice<bool>> SidesChoices { get; } = new[]
+    {
+        new Choice<bool>(false, "Single-sided"),
+        new Choice<bool>(true, "Double-sided"),
+    };
+
+    public IReadOnlyList<Choice<DuplexMode>> FlipChoices { get; } = new[]
+    {
+        new Choice<DuplexMode>(DuplexMode.LongEdge, "Long edge: turn like a book"),
+        new Choice<DuplexMode>(DuplexMode.ShortEdge, "Short edge: flip up like a notepad"),
+    };
+
+    public IReadOnlyList<Choice<PaperChoice>> Papers { get; } = Enum.GetValues<PaperChoice>()
+        .Select(paper => new Choice<PaperChoice>(paper, paper.Describe()))
+        .ToList();
+
+    public IReadOnlyList<Choice<BookletBinding>> Bindings { get; } = new[]
+    {
+        new Choice<BookletBinding>(BookletBinding.Left, "Left (left-to-right text)"),
+        new Choice<BookletBinding>(BookletBinding.Right, "Right (right-to-left text)"),
+    };
+
+    public IReadOnlyList<Choice<int>> SectionChoices { get; } = new[] { 0, 1, 2, 3, 4, 5, 6, 8, 10, 12 }
+        .Select(n => new Choice<int>(n, n == 0 ? "All sheets in one booklet" : $"{n} sheet{(n == 1 ? "" : "s")} ({n * 4} pages) per section"))
+        .ToList();
+
+    public IReadOnlyList<Choice<BrochureFold>> Folds { get; } = new[]
+    {
+        new Choice<BrochureFold>(BrochureFold.BiFold, "Bi-fold: 2 panels per side, 4 pages"),
+        new Choice<BrochureFold>(BrochureFold.TriFold, "Tri-fold: 3 panels per side, 6 pages"),
+    };
+
+    public IReadOnlyList<Choice<PageScaling>> Scalings { get; } = new[]
+    {
+        new Choice<PageScaling>(PageScaling.FitToPanel, "Fit each page to its panel"),
+        new Choice<PageScaling>(PageScaling.ShrinkOnly, "Actual size (shrink only if too big)"),
+    };
+
+    private PageSelection _pageSelection = PageSelection.AllPages;
+    public PageSelection PageSelection
+    {
+        get => _pageSelection;
+        set { if (Set(ref _pageSelection, value)) RefreshPrintSettings(); }
+    }
+
+    private PrintLayout _layout = PrintLayout.Normal;
+    private bool _normalDoubleSided;
+    private DuplexMode _normalFlip = DuplexMode.LongEdge;
+
+    public PrintLayout Layout
+    {
+        get => _layout;
+        set
+        {
+            var wasImposed = _layout != PrintLayout.Normal;
+            if (!Set(ref _layout, value)) return;
+
+            if (IsImposed && !wasImposed)
+            {
+                // A booklet or brochure has something on both sides of every sheet, and a
+                // landscape sheet folded down the middle turns over on its short edge.
+                _normalDoubleSided = _doubleSided;
+                _normalFlip = _flip;
+                _doubleSided = true;
+                _flip = DuplexMode.ShortEdge;
+            }
+            else if (!IsImposed && wasImposed)
+            {
+                _doubleSided = _normalDoubleSided;
+                _flip = _normalFlip;
+            }
+
+            foreach (var name in new[]
+                     {
+                         nameof(IsNormalLayout), nameof(IsBooklet), nameof(IsBrochure), nameof(IsImposed),
+                         nameof(CanChooseSides), nameof(DoubleSided), nameof(Flip), nameof(ShowFlip),
+                         nameof(BatchSizeLabel),
+                     })
+            {
+                Raise(name);
+            }
+
+            RefreshPrintSettings();
+        }
+    }
+
+    public bool IsNormalLayout => Layout == PrintLayout.Normal;
+    public bool IsBooklet => Layout == PrintLayout.Booklet;
+    public bool IsBrochure => Layout == PrintLayout.Brochure;
+    public bool IsImposed => Layout != PrintLayout.Normal;
+
+    /// <summary>Booklets and brochures are always double-sided; the choice is locked, not hidden.</summary>
+    public bool CanChooseSides => !IsImposed;
+
+    private bool _doubleSided;
+    public bool DoubleSided
+    {
+        get => _doubleSided;
+        set
+        {
+            if (!Set(ref _doubleSided, value)) return;
+            Raise(nameof(ShowFlip));
+            Raise(nameof(BatchSizeLabel));
+            RefreshPrintSettings();
+        }
+    }
+
+    public bool ShowFlip => DoubleSided;
+
+    private DuplexMode _flip = DuplexMode.LongEdge;
+    public DuplexMode Flip
+    {
+        get => _flip;
+        set { if (value != DuplexMode.SingleSided && Set(ref _flip, value)) RefreshPrintSettings(); }
+    }
+
+    private PaperChoice _paper;
+    public PaperChoice Paper
+    {
+        get => _paper;
+        set { if (Set(ref _paper, value)) RefreshPrintSettings(); }
+    }
+
+    private string _marginMm;
+    public string MarginMm
+    {
+        get => _marginMm;
+        set { if (Set(ref _marginMm, value)) RefreshPrintSettings(); }
+    }
+
+    private string _foldGapMm;
+    public string FoldGapMm
+    {
+        get => _foldGapMm;
+        set { if (Set(ref _foldGapMm, value)) RefreshPrintSettings(); }
+    }
+
+    private PageScaling _scaling;
+    public PageScaling Scaling
+    {
+        get => _scaling;
+        set { if (Set(ref _scaling, value)) RefreshPrintSettings(); }
+    }
+
+    private BookletBinding _binding;
+    public BookletBinding Binding
+    {
+        get => _binding;
+        set { if (Set(ref _binding, value)) RefreshPrintSettings(); }
+    }
+
+    private int _sheetsPerSection;
+    public int SheetsPerSection
+    {
+        get => _sheetsPerSection;
+        set { if (Set(ref _sheetsPerSection, value)) RefreshPrintSettings(); }
+    }
+
+    private bool _keepBackCover;
+    public bool KeepBackCover
+    {
+        get => _keepBackCover;
+        set { if (Set(ref _keepBackCover, value)) RefreshPrintSettings(); }
+    }
+
+    private BrochureFold _fold;
+    public BrochureFold Fold
+    {
+        get => _fold;
+        set
+        {
+            if (!Set(ref _fold, value)) return;
+            Raise(nameof(BrochurePanelOrder));
+            RefreshPrintSettings();
+        }
+    }
+
+    public string SidesHint => IsImposed
+        ? "Booklets and brochures have pages on both sides of every sheet."
+        : DoubleSided
+            ? "Long edge suits portrait pages; short edge suits landscape pages and top-bound documents."
+            : "";
+
+    public string FlipHint => IsImposed
+        ? "Short edge is right for a sheet folded down the middle. Change it only if a test print shows the backs upside down."
+        : "";
+
+    public string BookletNote => SheetsPerSection > 0
+        ? $"Sheets print outermost first. Fold each section of {SheetsPerSection} sheet(s) on its own, nesting each sheet inside the one before, then stack the sections in order."
+        : "Sheets print outermost first: sheet 1 is the cover. Keep them in order, nest each sheet inside the one before, and fold.";
+
+    public string BrochurePanelOrder => Fold == BrochureFold.TriFold
+        ? "The PDF's pages are the panels, in this order: 1 front cover · 2 flap that folds in · 3, 4, 5 inside, left to right · 6 back cover. " +
+          "Every further six pages make another leaflet. A PDF that already has whole sides laid out should be printed Normal, double-sided, short edge."
+        : "The PDF's pages are the panels, in this order: 1 front cover · 2, 3 inside, left and right · 4 back cover. " +
+          "Every further four pages make another leaflet. A PDF that already has whole sides laid out should be printed Normal, double-sided, short edge.";
+
+    /// <summary>"PAGES PER BATCH" for plain jobs, as always; "SHEETS PER BATCH" once a sheet carries more than one page.</summary>
+    public string BatchSizeLabel => !IsImposed && !DoubleSided ? "PAGES PER BATCH" : "SHEETS PER BATCH";
+
+    public string BatchSizeHint => IsImposed || DoubleSided
+        ? IsBooklet ? "1 sheet = 4 pages"
+          : IsBrochure ? (Fold == BrochureFold.TriFold ? "1 sheet = 6 panels" : "1 sheet = 4 panels")
+          : "1 sheet = 2 pages"
+        : "";
+
+    /// <summary>The print settings as chosen, or null with a reason when a field cannot be read.</summary>
+    private PrintSettings? BuildPrintSettings(out string? problem)
+    {
+        problem = null;
+
+        double margin = PrintSettings.Default.MarginMm, gap = PrintSettings.Default.FoldGapMm;
+        if (IsImposed)
+        {
+            if (!TryReadMm(MarginMm, out margin) || margin > PrintSettings.MaxMarginMm)
+            {
+                problem = $"The margin must be a number of millimetres between 0 and {PrintSettings.MaxMarginMm:0}.";
+                return null;
+            }
+
+            if (!TryReadMm(FoldGapMm, out gap) || gap > 2 * PrintSettings.MaxMarginMm)
+            {
+                problem = $"The space at the fold must be a number of millimetres between 0 and {2 * PrintSettings.MaxMarginMm:0}.";
+                return null;
+            }
+        }
+
+        var settings = new PrintSettings
+        {
+            PageSelection = PageSelection,
+            Layout = Layout,
+            Duplex = IsImposed || DoubleSided ? Flip : DuplexMode.SingleSided,
+            Paper = IsImposed ? Paper : PaperChoice.PrinterDefault,
+            MarginMm = IsImposed ? margin : PrintSettings.Default.MarginMm,
+            FoldGapMm = IsImposed ? gap : PrintSettings.Default.FoldGapMm,
+            Scaling = IsImposed ? Scaling : PageScaling.FitToPanel,
+            Binding = IsBooklet ? Binding : BookletBinding.Left,
+            SheetsPerSignature = IsBooklet ? SheetsPerSection : 0,
+            KeepLastPageAsBackCover = IsBooklet && KeepBackCover,
+            Fold = IsBrochure ? Fold : BrochureFold.BiFold,
+        };
+
+        problem = settings.Problems().FirstOrDefault();
+        return problem is null ? settings : null;
+    }
+
+    /// <summary>The plan for the loaded document with the chosen settings, or null with a reason.</summary>
+    private PrintPlan? BuildPlan(out string? problem)
+    {
+        problem = null;
+        if (Document is null) return null;
+
+        var settings = BuildPrintSettings(out problem);
+        if (settings is null) return null;
+
+        try
+        {
+            return PrintPlan.Build(settings, Document.PageCount);
+        }
+        catch (ArgumentException ex)
+        {
+            problem = ex.Message.Split(" (Parameter")[0];
+            return null;
+        }
+    }
+
+    /// <summary>What the driver said about each printer and set of sides, paper and orientation.</summary>
+    private readonly Dictionary<string, PrinterSetupReport> _setupChecks = new();
+    private readonly HashSet<string> _setupChecksRunning = new();
+
+    private static string SetupKey(string printer, PrinterSetup setup, double? margin) =>
+        $"{printer}|{setup}|{margin?.ToString(CultureInfo.InvariantCulture)}";
+
+    /// <summary>
+    /// The driver's verdict on the current choices: null while it is being asked, and also when
+    /// there is nothing to ask (a plain job leaves every printer setting at its default, as always).
+    /// </summary>
+    private PrinterSetupReport? CurrentSetupReport(out bool pending)
+    {
+        pending = false;
+        if (SelectedPrinter is not { } printer) return null;
+        if (BuildPrintSettings(out _) is not { } settings) return null;
+
+        var setup = settings.PrinterSetup;
+        if (setup == PrinterSetup.Default) return null;
+
+        var margin = settings.IsImposed ? settings.MarginMm : (double?)null;
+        var key = SetupKey(printer, setup, margin);
+        if (_setupChecks.TryGetValue(key, out var report)) return report;
+
+        pending = true;
+        if (_setupChecksRunning.Add(key))
+        {
+            // Asking a driver can take a moment on a network printer, so keep it off the UI
+            // thread. The check never throws.
+            _ = Task.Run(() =>
+            {
+                var result = PrinterSetupCheck.Check(printer, setup, margin);
+                _dispatcher.BeginInvoke(() =>
+                {
+                    _setupChecksRunning.Remove(key);
+                    _setupChecks[key] = result;
+                    RefreshPrintSettings();
+                });
+            });
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Under the print settings: whether the chosen printer can do what was asked, in words.
+    /// Problems name the setting to change; nothing is ever shown as applied that the driver refused.
+    /// </summary>
+    public string? PrinterSetupNote
+    {
+        get
+        {
+            var report = CurrentSetupReport(out var pending);
+            if (pending) return "Checking the printer's settings…";
+            if (report is null) return null;
+
+            var lines = report.Issues.Select(i => (i.Blocking ? "✕ " : "! ") + i.Message).ToList();
+
+            if (report.CanPrint && (IsImposed || DoubleSided))
+            {
+                lines.Add($"“{SelectedPrinter}” accepts double-sided printing. If it has no automatic duplex unit, " +
+                          "its driver may stop part-way through each batch and ask someone to turn the paper over.");
+            }
+
+            if (report.CanPrint && IsImposed && report.PaperName is { } paper)
+                lines.Add($"Sheets: {paper}, landscape.");
+
+            return lines.Count == 0 ? null : string.Join(Environment.NewLine, lines);
+        }
+    }
+
+    public Brush PrinterSetupNoteBrush =>
+        CurrentSetupReport(out _) is { } report && report.Issues.Count > 0
+            ? Resource("Warning")
+            : Resource("TextSecondary");
+
+    /// <summary>The first few sheets, side by side, so a booklet or brochure can be checked before printing.</summary>
+    public string? SheetMap
+    {
+        get
+        {
+            var plan = BuildPlan(out _);
+            if (plan is null || plan.Unit == PrintUnit.Page) return null;
+            return string.Join(Environment.NewLine, plan.DescribeSheets(4));
+        }
+    }
+
+    public bool ShowPrintDetails => IsImposed || DoubleSided || PageSelection != PageSelection.AllPages;
+
+    private void RefreshPrintSettings()
+    {
+        foreach (var name in new[]
+                 {
+                     nameof(SidesHint), nameof(FlipHint), nameof(BookletNote), nameof(BatchSizeHint),
+                     nameof(PrinterSetupNote), nameof(PrinterSetupNoteBrush), nameof(SheetMap),
+                     nameof(ShowPrintDetails), nameof(BatchPreview), nameof(InvoiceEstimate),
+                 })
+        {
+            Raise(name);
+        }
+
+        PreviewLayoutCommand.RaiseCanExecuteChanged();
+        RefreshCanStart();
+    }
+
+    private static bool TryReadMm(string text, out double value) =>
+        (double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value) ||
+         double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+        && double.IsFinite(value) && value >= 0;
+
+    private static string FormatMm(double value) => value.ToString("0.##", CultureInfo.CurrentCulture);
+
+    // ---- Layout preview ----------------------------------------------------------------------
+
+    private const string PreviewPrinter = "Microsoft Print to PDF";
+    private const int PreviewSheets = 8;
+
+    private bool _previewRunning;
+    private bool _hasPreviewPrinter;
+    private string? _previewStatus;
+
+    public string? PreviewStatus
+    {
+        get => _previewStatus;
+        private set => Set(ref _previewStatus, value);
+    }
+
+    public bool CanPreviewLayout =>
+        !_previewRunning && _hasPreviewPrinter && Document is not null && BuildPlan(out _) is not null;
+
+    /// <summary>
+    /// Prints the first few sheets through the very same print engine, to a PDF instead of
+    /// paper, and opens it. Fronts and backs come out as consecutive pages. Nothing is sent
+    /// to the chosen printer and no job is created.
+    /// </summary>
+    private async void PreviewLayout()
+    {
+        if (Document is not { } document || BuildPlan(out _) is not { } plan) return;
+
+        _previewRunning = true;
+        PreviewLayoutCommand.RaiseCanExecuteChanged();
+        PreviewStatus = "Preparing the preview…";
+
+        try
+        {
+            var last = Math.Min(plan.UnitCount, plan.Unit == PrintUnit.Page ? PreviewSheets * 2 : PreviewSheets);
+            var directory = Path.Combine(Path.GetTempPath(), "PrintPacer");
+            Directory.CreateDirectory(directory);
+            var output = Path.Combine(directory, $"layout-preview-{DateTime.Now:yyyyMMdd-HHmmss}.pdf");
+
+            var request = new PrintRequest
+            {
+                SourcePath = document.Path,
+                FirstPage = 1,
+                LastPage = last,
+                Sides = plan.SidesFor(1, last),
+                // The PDF printer has one side per page, so the preview is single-sided by design.
+                Setup = plan.Settings.PrinterSetup with { Duplex = DuplexMode.SingleSided },
+                Imposition = plan.Settings.IsImposed ? ImpositionOptions.From(plan.Settings) : null,
+                PrinterName = PreviewPrinter,
+                DocumentToken = $"PrintPacer layout preview {Guid.NewGuid():N}",
+                RenderDpi = 150,
+                ColourMode = ColourMode,
+                OutputFilePath = output,
+            };
+
+            var result = await new PdfiumPrintEngine().SubmitAsync(request, CancellationToken.None);
+            if (!result.Spooled)
+            {
+                PreviewStatus = $"The preview could not be made: {result.Error}";
+                return;
+            }
+
+            // The PDF printer finishes writing the file shortly after spooling ends.
+            for (var i = 0; i < 60 && !IsReadable(output); i++) await Task.Delay(250);
+
+            PreviewStatus = $"Preview of the first {last} {plan.UnitName(last)}: {output}";
+            OpenPath(output);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Layout preview failed");
+            PreviewStatus = $"The preview could not be made: {ex.Message}";
+        }
+        finally
+        {
+            _previewRunning = false;
+            PreviewLayoutCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private static bool IsReadable(string path)
+    {
+        try
+        {
+            using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None);
+            return stream.Length > 0;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// A plain-language preview of the exact schedule, shown before anything is committed.
     /// The user should never have to guess what pressing the button will do.
@@ -332,25 +840,37 @@ public sealed class MainViewModel : ObservableObject
         get
         {
             if (Document is null) return "Add a PDF to see how it will be split.";
+            if (BuildPlan(out var planProblem) is not { } plan) return planProblem!;
             if (!TryReadPagesPerBatch(out var perBatch, out var problem)) return problem!;
             if (!TryReadDelay(out var delay, out var delayProblem)) return delayProblem!;
 
-            var batches = PrintJob.PlanBatches("preview", Document.PageCount, perBatch);
+            var batches = PrintJob.PlanBatches("preview", plan, perBatch);
             var start = ResolveStart(out var startProblem);
             if (startProblem is not null) return startProblem;
 
+            var settings = plan.Settings;
             var mode = ColourMode.Describe().ToLowerInvariant();
             var lines = new List<string>
             {
-                batches.Count == 1
-                    ? $"One print job of {batches[0].PageCount} page(s), in {mode}."
-                    : $"{batches.Count} separate print jobs, {delay} minute(s) apart, every one in {mode}.",
+                $"Pages       {plan.DescribeSize()}",
+                $"Layout      {DescribeLayout(plan)}",
+                $"Sides       {settings.Duplex.Describe()}",
             };
 
+            if (settings.IsImposed)
+                lines.Add($"Spacing     {settings.DescribeSpacing()}{DescribeScale(plan)}");
+
+            lines.Add("");
+            lines.Add(batches.Count == 1
+                ? $"One print job of {batches[0].PageCount} {plan.UnitName(batches[0].PageCount)}, in {mode}."
+                : $"{batches.Count} separate print jobs of up to {perBatch} {plan.UnitName(perBatch)}, " +
+                  $"{delay} minute(s) apart, every one in {mode}.");
+
             var clock = start ?? DateTimeOffset.Now;
+            var width = Math.Max(18, batches.Take(4).Append(batches[^1]).Max(b => b.RangeLabel.Length));
             foreach (var batch in batches.Take(4))
             {
-                lines.Add($"    Batch {batch.Number}:  {batch.RangeLabel,-18}  {clock.LocalDateTime:ddd HH:mm}");
+                lines.Add($"    Batch {batch.Number}:  {batch.RangeLabel.PadRight(width)}  {clock.LocalDateTime:ddd HH:mm}");
                 clock = clock.AddMinutes(delay);
             }
 
@@ -359,10 +879,52 @@ public sealed class MainViewModel : ObservableObject
                 var last = batches[^1];
                 var finish = (start ?? DateTimeOffset.Now).AddMinutes((double)delay * (batches.Count - 1));
                 lines.Add($"    …");
-                lines.Add($"    Batch {last.Number}:  {last.RangeLabel,-18}  {finish.LocalDateTime:ddd HH:mm}");
+                lines.Add($"    Batch {last.Number}:  {last.RangeLabel.PadRight(width)}  {finish.LocalDateTime:ddd HH:mm}");
             }
 
             return string.Join(Environment.NewLine, lines);
+        }
+    }
+
+    private string DescribeLayout(PrintPlan plan)
+    {
+        var settings = plan.Settings;
+        var paper = settings.Paper == PaperChoice.PrinterDefault &&
+                    CurrentSetupReport(out _) is { PaperName: { } name }
+            ? name
+            : settings.Paper.Describe();
+
+        return settings.Layout switch
+        {
+            PrintLayout.Booklet =>
+                $"Booklet, {settings.Binding.Describe().ToLowerInvariant()}, 2 pages per side, {paper} landscape" +
+                (settings.SheetsPerSignature > 0 ? $", sections of {settings.SheetsPerSignature} sheet(s)" : "") +
+                (settings.KeepLastPageAsBackCover ? ", last page kept as back cover" : ""),
+            PrintLayout.Brochure =>
+                $"Brochure, {settings.Fold.Describe().ToLowerInvariant()}, one leaflet per sheet, {paper} landscape",
+            _ => "Normal, one page per side, on the printer's paper",
+        };
+    }
+
+    /// <summary>", pages at about 71%": how much the document's first page is reduced to fit its panel.</summary>
+    private string DescribeScale(PrintPlan plan)
+    {
+        if (Document?.FirstPageWidthPt is not { } widthPt || Document.FirstPageHeightPt is not { } heightPt) return "";
+
+        var paper = CurrentSetupReport(out _)?.PaperSize ?? ImpositionGeometry.NominalPaper(plan.Settings.Paper);
+        if (paper is not { } portrait) return "";
+
+        try
+        {
+            var box = ImpositionGeometry.PanelBoxes(ImpositionGeometry.Landscape(portrait), plan.PanelsPerSide,
+                plan.Settings.MarginMm, plan.Settings.FoldGapMm)[0];
+            var scale = ImpositionGeometry.ScaleFor(box, ImpositionGeometry.PointsToHundredths(widthPt, heightPt),
+                plan.Settings.Scaling);
+            return $", pages at about {scale * 100:0}%";
+        }
+        catch (ArgumentException ex)
+        {
+            return $" ({ex.Message})";
         }
     }
 
@@ -414,15 +976,19 @@ public sealed class MainViewModel : ObservableObject
             if (Document is null) return "Add a PDF to see what the invoice will charge.";
             if (!TryReadPrices(out var blackWhite, out var colour, out var problem)) return problem!;
 
+            // Only pages that will print are charged: an odd- or even-page job bills half the
+            // document, and a booklet's blank padding bills nothing.
+            var selected = BuildPlan(out _)?.SelectedPages ?? Enumerable.Range(1, Document.PageCount).ToList();
+
             var colourPages = 0;
             if (!BlackAndWhite)
             {
                 if (_colourMap is null)
                     return _colourProblem ?? $"Checking which pages use colour…  {_pagesChecked} of {Document.PageCount}";
-                colourPages = _colourMap.Count(c => c == PageColourMap.Colour);
+                colourPages = selected.Count(p => PageColourMap.IsColour(_colourMap, p));
             }
 
-            var blackWhitePages = Document.PageCount - colourPages;
+            var blackWhitePages = selected.Count - colourPages;
             var lines = new List<string>
             {
                 $"Black & white  {blackWhitePages,6} × {Money(blackWhite),10}  = {Money(blackWhitePages * blackWhite),12}",
@@ -437,8 +1003,7 @@ public sealed class MainViewModel : ObservableObject
             }
             else if (colourPages > 0)
             {
-                var pages = Enumerable.Range(1, Document.PageCount)
-                    .Where(p => PageColourMap.IsColour(_colourMap!, p)).ToList();
+                var pages = selected.Where(p => PageColourMap.IsColour(_colourMap!, p)).ToList();
                 lines.Add("");
                 lines.Add($"Colour pages: {PageColourMap.Shorten(PageColourMap.DescribeRanges(pages), 160)}");
             }
@@ -565,16 +1130,22 @@ public sealed class MainViewModel : ObservableObject
     public string JobDocument => _job?.FileName ?? "";
     public string JobSubtitle => _job is null
         ? ""
-        : $"{_job.TotalPages} pages  ·  {_job.BatchCount} batches of up to {_job.PagesPerBatch}  " +
+        : $"{_job.SizeSummary}  ·  {_job.BatchCount} batches of up to {_job.PagesPerBatch} {_job.UnitName(_job.PagesPerBatch)}  " +
           $"·  {_job.DelayMinutes} min apart  ·  {_job.ColourMode.Describe()}  ·  {_job.PrinterName}";
 
+    /// <summary>The job's page selection, layout and sides, when they are anything but the plain default.</summary>
+    public string JobPrintSettings => _job is null || _job.PrintSettings == PrintSettings.Default
+        ? ""
+        : _job.PrintSettings.Summary() + (_job.PrintSettings.IsImposed ? $"  ·  {_job.PrintSettings.DescribeSpacing()}" : "");
+
+    /// <summary>Print units done: pages for a plain job, sheets for a double-sided, booklet or brochure job.</summary>
     public int PagesDone => _job?.PagesDone ?? 0;
 
-    public int PagesTotal => _job?.TotalPages ?? 0;
+    public int PagesTotal => _job?.UnitCount ?? 0;
 
     public double ProgressPercent => PagesTotal == 0 ? 0 : 100.0 * PagesDone / PagesTotal;
 
-    public string ProgressText => _job is null ? "" : $"{PagesDone} / {PagesTotal} pages";
+    public string ProgressText => _job is null ? "" : $"{PagesDone} / {PagesTotal} {_job.UnitName(PagesTotal)}";
 
     public string StateHeadline => _job?.State switch
     {
@@ -806,6 +1377,7 @@ public sealed class MainViewModel : ObservableObject
     private async void Start()
     {
         if (Document is null || SelectedPrinter is null) return;
+        if (BuildPlan(out _) is not { } plan) return;
         if (!TryReadPagesPerBatch(out var perBatch, out _)) return;
         if (!TryReadDelay(out var delay, out _)) return;
 
@@ -826,12 +1398,13 @@ public sealed class MainViewModel : ObservableObject
                 Document, SelectedPrinter, perBatch, delay,
                 StartLater ? StartMode.AtTime : StartMode.Immediately,
                 start?.ToUniversalTime(),
-                Settings.RenderDpi, ColourMode, invoice);
+                Settings.RenderDpi, ColourMode, invoice, plan.Settings);
 
             Settings.DefaultPagesPerBatch = perBatch;
             Settings.DefaultDelayMinutes = delay;
             Settings.LastPrinterName = SelectedPrinter;
             Settings.ColourMode = ColourMode;
+            if (plan.Settings.IsImposed) Settings.LayoutDefaults = plan.Settings;
             Settings.PrintInvoice = PrintInvoice;
             if (invoice is not null)
             {
@@ -856,7 +1429,7 @@ public sealed class MainViewModel : ObservableObject
         var remaining = _job.PendingBatchCount;
         var answer = MessageBox.Show(
             $"Cancel printing {_job.FileName}?\n\n" +
-            $"{PagesDone} of {PagesTotal} pages have printed so far. " +
+            $"{PagesDone} of {PagesTotal} {_job.UnitName(PagesTotal)} have printed so far. " +
             $"{remaining} batch(es) will not be sent.\n\n" +
             "Anything already in the printer's queue will still finish.",
             "Cancel job", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
@@ -876,6 +1449,14 @@ public sealed class MainViewModel : ObservableObject
 
         Document = null;
         SetupProblem = null;
+        PreviewStatus = null;
+
+        // A new job starts plain: the last job printing odd pages, or as a booklet, is no
+        // reason for the next document to. Paper, margins and the like stay as they were.
+        PageSelection = PageSelection.AllPages;
+        Layout = PrintLayout.Normal;
+        DoubleSided = false;
+
         RefreshAll();
     }
 
@@ -996,6 +1577,7 @@ public sealed class MainViewModel : ObservableObject
         foreach (var name in new[]
                  {
                      nameof(ShowDashboard), nameof(ShowSetup), nameof(JobDocument), nameof(JobSubtitle),
+                     nameof(JobPrintSettings),
                      nameof(PagesDone), nameof(PagesTotal), nameof(ProgressPercent), nameof(ProgressText),
                      nameof(StateHeadline), nameof(StateDetail), nameof(StateForeground), nameof(StateBackground),
                      nameof(CurrentBatchText), nameof(NextBatchText), nameof(CanPause), nameof(CanResume),
@@ -1022,8 +1604,11 @@ public sealed class MainViewModel : ObservableObject
 
             if (isCurrent && batch.State == BatchState.InFlight)
             {
+                // Windows counts printed sides, which for a sheet-based job is not the sheet count.
                 live = batch.SpoolerPagesPrinted > 0
-                    ? $"Printing · {batch.SpoolerPagesPrinted}/{batch.PageCount}"
+                    ? _job.Unit == PrintUnit.Page
+                        ? $"Printing · {batch.SpoolerPagesPrinted}/{batch.PageCount}"
+                        : $"Printing · side {batch.SpoolerPagesPrinted}/{batch.Impressions}"
                     : batch.LastSpoolerStatus ?? "Sending";
             }
 
@@ -1164,6 +1749,19 @@ public sealed class MainViewModel : ObservableObject
         if (Document is null) { CanStart = false; SetupProblem = null; return; }
         if (SelectedPrinter is null) { CanStart = false; SetupProblem = "Choose a printer."; return; }
 
+        // What to print comes first: without a plan there is nothing to batch.
+        if (BuildPlan(out var planProblem) is null) { CanStart = false; SetupProblem = planProblem; return; }
+
+        // Double-sided, paper and landscape must be confirmed by the driver before a job exists.
+        var setupReport = CurrentSetupReport(out var setupPending);
+        if (setupPending) { CanStart = false; SetupProblem = null; return; }
+        if (setupReport?.FirstBlocking is { } blocking)
+        {
+            CanStart = false;
+            SetupProblem = $"{blocking.Setting}: {blocking.Message}";
+            return;
+        }
+
         if (!TryReadPagesPerBatch(out _, out var pagesProblem)) { CanStart = false; SetupProblem = pagesProblem; return; }
         if (!TryReadDelay(out _, out var delayProblem)) { CanStart = false; SetupProblem = delayProblem; return; }
 
@@ -1188,14 +1786,17 @@ public sealed class MainViewModel : ObservableObject
         problem = null;
         if (!int.TryParse(PagesPerBatch, out value) || value < 1)
         {
-            problem = "Pages per batch must be a whole number of at least 1.";
+            problem = BatchSizeLabel == "PAGES PER BATCH"
+                ? "Pages per batch must be a whole number of at least 1."
+                : "Sheets per batch must be a whole number of at least 1.";
             return false;
         }
 
-        if (Document is not null && value > Document.PageCount)
+        var units = BuildPlan(out _)?.UnitCount ?? Document?.PageCount;
+        if (units is { } total && value > total)
         {
             // Not an error: the document simply becomes a single batch.
-            value = Document.PageCount;
+            value = total;
         }
 
         return true;
@@ -1247,9 +1848,13 @@ public sealed class MainViewModel : ObservableObject
 
         // A driver may have been changed or updated since it was last asked.
         _monochromeChecks.Clear();
+        _setupChecks.Clear();
 
         foreach (var name in _spooler.ListPrinterNames().OrderBy(n => n))
             Printers.Add(name);
+
+        _hasPreviewPrinter = Printers.Contains(PreviewPrinter);
+        PreviewLayoutCommand.RaiseCanExecuteChanged();
 
         // Preference order: what was already chosen, then what the user chose last time,
         // then the Windows default printer. Falling back to the alphabetically first queue

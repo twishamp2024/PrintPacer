@@ -66,7 +66,7 @@ winget install JRSoftware.InnoSetup
 .\build.ps1 -Installer
 ```
 
-Produces `installer\output\PrintPacer-Setup-1.2.0.exe` — a single 51 MB file
+Produces `installer\output\PrintPacer-Setup-1.3.0.exe` — a single 51 MB file
 compressed from the 157 MB payload, which a user downloads and double-clicks.
 
 Installs to `C:\Program Files\PrintPacer` for all users, with a Start Menu
@@ -83,9 +83,9 @@ elevate is offered a per-user install instead.
 Useful switches:
 
 ```powershell
-PrintPacer-Setup-1.2.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-PrintPacer-Setup-1.2.0.exe /VERYSILENT /TASKS=desktopicon
-PrintPacer-Setup-1.2.0.exe /LOG=setup.log
+PrintPacer-Setup-1.3.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+PrintPacer-Setup-1.3.0.exe /VERYSILENT /TASKS=desktopicon
+PrintPacer-Setup-1.3.0.exe /LOG=setup.log
 ```
 
 The setup declares `AppMutex`, so if PrintPacer is running when an upgrade
@@ -169,6 +169,15 @@ $probe = ".\tools\PrintPacer.Probe\bin\Debug\net8.0-windows\PrintPacer.Probe.exe
 & $probe print in.pdf 51 100 "Printer" out.pdf    # one batch as one spooler job
 & $probe verify out.pdf in.pdf 51 100        # which source pages actually printed
 & $probe makeicon app.ico                    # regenerate the application icon
+& $probe png printed.pdf pngs 60             # render each page to a PNG, to look at a layout
+```
+
+To try a build without touching the jobs of the copy in real use - which it would
+otherwise open, migrate and, with automatic resume on, carry on printing - give it
+its own data folder:
+
+```powershell
+.\src\PrintPacer.App\bin\Debug\net8.0-windows\PrintPacer.exe --data-dir=C:\Temp\pp-sandbox
 ```
 
 `verify` is the interesting one: it fingerprints every page of both files and

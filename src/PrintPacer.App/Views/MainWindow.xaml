@@ -105,6 +105,201 @@
                         </Grid>
                     </Border>
 
+                    <!-- Print settings: what is printed, and how it is laid out on the paper. Comes
+                         before batching, because batches divide whatever these produce. -->
+                    <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock Text="PRINT SETTINGS" Style="{StaticResource FieldLabel}" Margin="0,0,0,12" />
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="18" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="18" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="PAGES" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox Style="{StaticResource Dropdown}"
+                                              AutomationProperties.Name="Pages to print"
+                                              ItemsSource="{Binding PageSelections}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding PageSelection, Mode=TwoWay}" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="LAYOUT" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox Style="{StaticResource Dropdown}"
+                                              AutomationProperties.Name="Layout"
+                                              ItemsSource="{Binding Layouts}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding Layout, Mode=TwoWay}" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="4">
+                                    <TextBlock Text="SIDES" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox Style="{StaticResource Dropdown}"
+                                              AutomationProperties.Name="Single or double-sided"
+                                              IsEnabled="{Binding CanChooseSides}"
+                                              ItemsSource="{Binding SidesChoices}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding DoubleSided, Mode=TwoWay}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Double-sided: which way the sheet turns over -->
+                            <Grid Margin="0,14,0,0" Visibility="{Binding ShowFlip, Converter={StaticResource Show}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="280" />
+                                    <ColumnDefinition Width="18" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="FLIP ON" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox Style="{StaticResource Dropdown}"
+                                              AutomationProperties.Name="Flip on"
+                                              ItemsSource="{Binding FlipChoices}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding Flip, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" VerticalAlignment="Bottom">
+                                    <TextBlock Text="{Binding SidesHint}" Style="{StaticResource Secondary}"
+                                               FontSize="11.5" TextWrapping="Wrap"
+                                               Visibility="{Binding SidesHint, Converter={StaticResource ShowText}}" />
+                                    <TextBlock Text="{Binding FlipHint}" Style="{StaticResource Secondary}"
+                                               FontSize="11.5" TextWrapping="Wrap" Margin="0,2,0,0"
+                                               Visibility="{Binding FlipHint, Converter={StaticResource ShowText}}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Booklet -->
+                            <StackPanel Margin="0,16,0,0" Visibility="{Binding IsBooklet, Converter={StaticResource Show}}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="18" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="BINDING" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox Style="{StaticResource Dropdown}"
+                                                  AutomationProperties.Name="Booklet binding"
+                                                  ItemsSource="{Binding Bindings}"
+                                                  DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding Binding, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="FOLDED IN" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox Style="{StaticResource Dropdown}"
+                                                  AutomationProperties.Name="Sheets per folded section"
+                                                  ItemsSource="{Binding SectionChoices}"
+                                                  DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding SheetsPerSection, Mode=TwoWay}" />
+                                    </StackPanel>
+                                </Grid>
+                                <CheckBox Style="{StaticResource Check}" Margin="0,12,0,0"
+                                          Content="Keep the last page as the back cover (any blank pages go just before it)"
+                                          IsChecked="{Binding KeepBackCover, Mode=TwoWay}" />
+                                <TextBlock Text="{Binding BookletNote}" Style="{StaticResource Secondary}"
+                                           FontSize="11.5" Margin="2,8,0,0" TextWrapping="Wrap" />
+                            </StackPanel>
+
+                            <!-- Brochure -->
+                            <StackPanel Margin="0,16,0,0" Visibility="{Binding IsBrochure, Converter={StaticResource Show}}">
+                                <StackPanel Width="340" HorizontalAlignment="Left">
+                                    <TextBlock Text="FOLD" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox Style="{StaticResource Dropdown}"
+                                              AutomationProperties.Name="Brochure fold"
+                                              ItemsSource="{Binding Folds}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding Fold, Mode=TwoWay}" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding BrochurePanelOrder}" Style="{StaticResource Secondary}"
+                                           FontSize="11.5" Margin="2,8,0,0" TextWrapping="Wrap" />
+                            </StackPanel>
+
+                            <!-- The sheet: shared by booklet and brochure -->
+                            <Grid Margin="0,16,0,0" Visibility="{Binding IsImposed, Converter={StaticResource Show}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="18" />
+                                    <ColumnDefinition Width="110" />
+                                    <ColumnDefinition Width="18" />
+                                    <ColumnDefinition Width="130" />
+                                    <ColumnDefinition Width="18" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="PAPER" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox Style="{StaticResource Dropdown}"
+                                              AutomationProperties.Name="Paper size"
+                                              ItemsSource="{Binding Papers}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding Paper, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="MARGIN" Style="{StaticResource FieldLabel}" />
+                                    <Grid>
+                                        <TextBox Style="{StaticResource Field}" Height="38"
+                                                 AutomationProperties.Name="Margin in millimetres"
+                                                 Text="{Binding MarginMm, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBlock Text="mm" Style="{StaticResource Secondary}" FontSize="12"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,12,0" />
+                                    </Grid>
+                                </StackPanel>
+                                <StackPanel Grid.Column="4">
+                                    <TextBlock Text="SPACE AT FOLD" Style="{StaticResource FieldLabel}" />
+                                    <Grid>
+                                        <TextBox Style="{StaticResource Field}" Height="38"
+                                                 AutomationProperties.Name="Space at each fold in millimetres"
+                                                 Text="{Binding FoldGapMm, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBlock Text="mm" Style="{StaticResource Secondary}" FontSize="12"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,12,0" />
+                                    </Grid>
+                                </StackPanel>
+                                <StackPanel Grid.Column="6">
+                                    <TextBlock Text="PAGE SIZE" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox Style="{StaticResource Dropdown}"
+                                              AutomationProperties.Name="Page scaling"
+                                              ItemsSource="{Binding Scalings}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding Scaling, Mode=TwoWay}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- What the printer's driver said about sides, paper and orientation -->
+                            <TextBlock Text="{Binding PrinterSetupNote}" Style="{StaticResource Secondary}"
+                                       Foreground="{Binding PrinterSetupNoteBrush}"
+                                       FontSize="11.5" Margin="2,12,0,0" TextWrapping="Wrap"
+                                       Visibility="{Binding PrinterSetupNote, Converter={StaticResource ShowText}}" />
+
+                            <!-- The first sheets, so the arrangement can be checked before printing -->
+                            <Border Margin="0,12,0,0" CornerRadius="8" Padding="14,10"
+                                    Background="{StaticResource SurfaceMuted}"
+                                    Visibility="{Binding SheetMap, Converter={StaticResource ShowText}}">
+                                <StackPanel>
+                                    <TextBlock Text="SHEETS (PAGE NUMBERS, LEFT TO RIGHT; · IS A BLANK PAGE)"
+                                               Style="{StaticResource FieldLabel}" />
+                                    <TextBlock Text="{Binding SheetMap}" Style="{StaticResource Mono}"
+                                               Foreground="{StaticResource TextPrimary}" LineHeight="20" />
+                                </StackPanel>
+                            </Border>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0"
+                                        Visibility="{Binding ShowPrintDetails, Converter={StaticResource Show}}">
+                                <Button Content="Preview layout as PDF…" Style="{StaticResource SecondaryButton}"
+                                        Padding="12,6" FontSize="12.5"
+                                        Command="{Binding PreviewLayoutCommand}"
+                                        ToolTip="Draws the first sheets exactly as they will print, into a PDF, using Microsoft Print to PDF. Nothing is sent to your printer." />
+                                <TextBlock Text="{Binding PreviewStatus}" Style="{StaticResource Secondary}"
+                                           FontSize="11.5" Margin="12,0,0,0" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis" MaxWidth="520" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
                     <!-- Configuration -->
                     <Border Style="{StaticResource Card}" Margin="0,16,0,0">
                         <StackPanel>
@@ -131,9 +326,13 @@
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="2">
-                                    <TextBlock Text="PAGES PER BATCH" Style="{StaticResource FieldLabel}" />
+                                    <TextBlock Text="{Binding BatchSizeLabel}" Style="{StaticResource FieldLabel}" />
                                     <TextBox Style="{StaticResource Field}" Height="38"
+                                             AutomationProperties.Name="{Binding BatchSizeLabel}"
                                              Text="{Binding PagesPerBatch, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Text="{Binding BatchSizeHint}" Style="{StaticResource Secondary}"
+                                               FontSize="11.5" Margin="2,5,0,0"
+                                               Visibility="{Binding BatchSizeHint, Converter={StaticResource ShowText}}" />
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="4">
@@ -265,6 +464,9 @@
                                     <TextBlock Text="{Binding JobDocument}" Style="{StaticResource Title}" />
                                     <TextBlock Text="{Binding JobSubtitle}" Style="{StaticResource Secondary}"
                                                FontSize="12.5" Margin="0,3,0,0" />
+                                    <TextBlock Text="{Binding JobPrintSettings}" Style="{StaticResource Secondary}"
+                                               FontSize="12.5" Margin="0,2,0,0" TextWrapping="Wrap"
+                                               Visibility="{Binding JobPrintSettings, Converter={StaticResource ShowText}}" />
                                 </StackPanel>
 
                                 <Border Style="{StaticResource Pill}" HorizontalAlignment="Right"

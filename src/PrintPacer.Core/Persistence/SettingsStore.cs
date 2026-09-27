@@ -100,7 +100,28 @@ public sealed class SettingsStore
         s.LegacyGrayscale = null;
         if (!Enum.IsDefined(s.ColourMode)) s.ColourMode = ColourMode.Colour;
 
+        s.LayoutDefaults = SanitiseLayout(s.LayoutDefaults);
+
         return s;
+    }
+
+    private static PrintSettings SanitiseLayout(PrintSettings? layout)
+    {
+        var d = PrintSettings.Default;
+        if (layout is null) return d;
+
+        return d with
+        {
+            Paper = Enum.IsDefined(layout.Paper) ? layout.Paper : d.Paper,
+            MarginMm = double.IsFinite(layout.MarginMm) ? Math.Clamp(layout.MarginMm, 0, PrintSettings.MaxMarginMm) : d.MarginMm,
+            FoldGapMm = double.IsFinite(layout.FoldGapMm) ? Math.Clamp(layout.FoldGapMm, 0, 2 * PrintSettings.MaxMarginMm) : d.FoldGapMm,
+            Scaling = Enum.IsDefined(layout.Scaling) ? layout.Scaling : d.Scaling,
+            Binding = Enum.IsDefined(layout.Binding) ? layout.Binding : d.Binding,
+            SheetsPerSignature = Math.Clamp(layout.SheetsPerSignature, 0, PrintSettings.MaxSheetsPerSignature),
+            KeepLastPageAsBackCover = layout.KeepLastPageAsBackCover,
+            Fold = Enum.IsDefined(layout.Fold) ? layout.Fold : d.Fold,
+            // Page selection, layout and sides are chosen afresh for every job.
+        };
     }
 
     private void TryBackupCorruptFile()

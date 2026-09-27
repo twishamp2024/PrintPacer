@@ -19,7 +19,13 @@ public static class TestPdfBuilder
     private const double PageHeight = 841.890;
 
     /// <param name="colourPages">1-based pages that also carry a solid red block, for the colour check.</param>
-    public static void Write(string path, int pageCount, string title, IReadOnlyCollection<int>? colourPages = null)
+    /// <param name="identityBarcode">
+    /// Adds a row of black and white cells encoding the page number, which survives being
+    /// rasterised, scaled onto a booklet or brochure panel and printed to a file, so a test can
+    /// read back exactly which page landed where. See <see cref="DecodeIdentity"/>.
+    /// </param>
+    public static void Write(string path, int pageCount, string title, IReadOnlyCollection<int>? colourPages = null,
+        bool identityBarcode = false)
     {
         if (pageCount < 1) throw new ArgumentOutOfRangeException(nameof(pageCount));
 
@@ -42,7 +48,8 @@ public static class TestPdfBuilder
 
         for (var page = 1; page <= pageCount; page++)
         {
-            var content = BuildPageContent(page, pageCount, title, colourPages?.Contains(page) == true);
+            var content = BuildPageContent(page, pageCount, title, colourPages?.Contains(page) == true)
+                          + (identityBarcode ? BuildBarcode(page) : "");
             var contentBytes = Latin1(content);
             var streamObject = new List<byte>();
             streamObject.AddRange(Latin1($"<< /Length {contentBytes.Length} >>\nstream\n"));
@@ -114,6 +121,51 @@ public static class TestPdfBuilder
 
         return sb.ToString();
     }
+
+    // ---- Identity barcode ------------------------------------------------------------------
+
+    /// <summary>Bits after the always-black guard cell: page numbers up to 1023.</summary>
+    public const int BarcodeBits = 10;
+
+    private const double BarcodeLeft = 80;
+    private const double BarcodeBottom = 170;
+    private const double BarcodeCell = 36;
+    private const double BarcodePitch = 40;
+
+    private static string BuildBarcode(int page)
+    {
+        var sb = new StringBuilder("0 0 0 rg\n");
+        for (var cell = 0; cell <= BarcodeBits; cell++)
+        {
+            var dark = cell == 0 || ((page >> (cell - 1)) & 1) == 1;
+            if (!dark) continue;
+            sb.Append(CultureInfo.InvariantCulture,
+                $"{F(BarcodeLeft + cell * BarcodePitch)} {F(BarcodeBottom)} {F(BarcodeCell)} {F(BarcodeCell)} re f\n");
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Reads a page number back from a picture of a page drawn with the identity barcode.
+    /// <paramref name="isDark"/> is asked about points given as fractions of the page's width and
+    /// height from its top-left corner, so the caller only needs to know where the page landed.
+    /// Returns null when the guard cell is not dark - no fixture page is there, only blank paper.
+    /// </summary>
+    public static int? DecodeIdentity(Func<double, double, bool> isDark)
+    {
+        double X(int cell) => (BarcodeLeft + cell * BarcodePitch + BarcodeCell / 2) / PageWidth;
+        var y = (PageHeight - (BarcodeBottom + BarcodeCell / 2)) / PageHeight;
+
+        if (!isDark(X(0), y)) return null;
+
+        var page = 0;
+        for (var bit = 0; bit < BarcodeBits; bit++)
+            if (isDark(X(bit + 1), y)) page |= 1 << bit;
+        return page;
+    }
+
+    /// <summary>Natural size of every fixture page, in points.</summary>
+    public static (double Width, double Height) PageSizePt => (PageWidth, PageHeight);
 
     private static void WritePdf(string path, List<byte[]> objects, string title)
     {

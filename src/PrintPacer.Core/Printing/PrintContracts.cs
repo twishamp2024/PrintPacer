@@ -2,14 +2,38 @@ using PrintPacer.Core.Model;
 
 namespace PrintPacer.Core.Printing;
 
-/// <summary>A request to print one contiguous page range as exactly one Windows print job.</summary>
+/// <summary>
+/// A request to print one batch as exactly one Windows print job.
+///
+/// What to draw is <see cref="Sides"/>: every side of every sheet in the batch, in order, as the
+/// job's <see cref="PrintPlan"/> laid them out. A request without sides prints the contiguous
+/// page range <see cref="FirstPage"/>-<see cref="LastPage"/>, one page per side, which is what a
+/// plain job's plan produces anyway.
+/// </summary>
 public sealed record PrintRequest
 {
     public required string SourcePath { get; init; }
 
-    /// <summary>1-based inclusive page range within the source document.</summary>
+    /// <summary>
+    /// The batch's first and last print unit (see <see cref="PrintPlan.Unit"/>): source page
+    /// numbers for a plain job, sheet numbers otherwise. Used for the range when
+    /// <see cref="Sides"/> is null, and for logging.
+    /// </summary>
     public required int FirstPage { get; init; }
     public required int LastPage { get; init; }
+
+    /// <summary>The sides to print, in order. Null means pages <see cref="FirstPage"/>-<see cref="LastPage"/>, one per side.</summary>
+    public IReadOnlyList<PrintSide>? Sides { get; init; }
+
+    /// <summary>Sides, paper and orientation asked of the printer driver.</summary>
+    public PrinterSetup Setup { get; init; } = PrinterSetup.Default;
+
+    /// <summary>
+    /// How pages are placed on an imposed side (booklet, brochure). Null for one page per side,
+    /// which is drawn exactly as PrintPacer always has: fitted to the printable area and turned
+    /// to match the paper.
+    /// </summary>
+    public ImpositionOptions? Imposition { get; init; }
 
     public required string PrinterName { get; init; }
 
@@ -38,7 +62,20 @@ public sealed record PrintRequest
     /// </summary>
     public string? OutputFilePath { get; init; }
 
-    public int PageCount => LastPage - FirstPage + 1;
+    /// <summary>What is actually drawn: <see cref="Sides"/>, or the page range one page per side.</summary>
+    public IReadOnlyList<PrintSide> EffectiveSides => Sides ?? Enumerable.Range(FirstPage, Math.Max(0, LastPage - FirstPage + 1))
+        .Select(page => new PrintSide(page, SheetFace.Front, new int?[] { page }))
+        .ToList();
+
+    /// <summary>Printed sides in the job: the pages the spooler counts and the printer's counter should advance by.</summary>
+    public int PageCount => Sides?.Count ?? LastPage - FirstPage + 1;
+}
+
+/// <summary>Placement of pages on an imposed side, as chosen on the setup screen.</summary>
+public sealed record ImpositionOptions(double MarginMm, double FoldGapMm, PageScaling Scaling)
+{
+    public static ImpositionOptions From(PrintSettings settings) =>
+        new(settings.MarginMm, settings.FoldGapMm, settings.Scaling);
 }
 
 /// <summary>Outcome of handing a batch to the spooler. Says nothing about paper yet.</summary>
@@ -57,6 +94,16 @@ public sealed record PrintResult
     /// is told rather than left believing the printer was asked for black ink only.
     /// </summary>
     public string? ColourWarning { get; init; }
+
+    /// <summary>
+    /// Set when nothing was printed because the printer driver would not accept the job's
+    /// sides, paper or orientation. Retrying cannot help, so the engine stops and says why
+    /// instead of sending it again.
+    /// </summary>
+    public bool SetupRejected { get; init; }
+
+    /// <summary>Advice about the job's printer settings that did not stop it printing.</summary>
+    public string? SetupWarning { get; init; }
 
     public DateTimeOffset StartedUtc { get; init; }
     public DateTimeOffset FinishedUtc { get; init; }

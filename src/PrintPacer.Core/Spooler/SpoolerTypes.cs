@@ -81,6 +81,9 @@ public sealed record SpoolerJob
     /// </summary>
     public bool? Monochrome { get; init; }
 
+    /// <summary>The job's own sides setting (DEVMODE <c>dmDuplex</c>); null when it carries none.</summary>
+    public PrintPacer.Core.Model.DuplexMode? Duplex { get; init; }
+
     public int Position { get; init; }
     public long SizeBytes { get; init; }
 

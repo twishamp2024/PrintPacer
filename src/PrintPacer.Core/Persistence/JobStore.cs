@@ -23,7 +23,7 @@ namespace PrintPacer.Core.Persistence;
 public sealed class JobStore : IDisposable
 {
     private static readonly ILogger Log = Serilog.Log.ForContext<JobStore>();
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
 
     private readonly SqliteConnection _connection;
     private readonly object _gate = new();
@@ -83,7 +83,34 @@ public sealed class JobStore : IDisposable
             }
 
             if (current < 2) UpgradeToV2();
+            if (current < 3) UpgradeToV3();
         }
+    }
+
+    /// <summary>
+    /// v3: page selection, layout and sides. Every default is what older versions did, so jobs
+    /// already in the database - including ones mid-way through printing - carry on unchanged,
+    /// and their batch ranges keep meaning source pages.
+    /// </summary>
+    private void UpgradeToV3()
+    {
+        using var transaction = _connection.BeginTransaction();
+        Execute("""
+            ALTER TABLE jobs ADD COLUMN page_selection      INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE jobs ADD COLUMN layout              INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE jobs ADD COLUMN duplex              INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE jobs ADD COLUMN paper               INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE jobs ADD COLUMN margin_mm           TEXT;
+            ALTER TABLE jobs ADD COLUMN fold_gap_mm         TEXT;
+            ALTER TABLE jobs ADD COLUMN scaling             INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE jobs ADD COLUMN booklet_binding     INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE jobs ADD COLUMN sheets_per_section  INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE jobs ADD COLUMN keep_back_cover     INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE jobs ADD COLUMN brochure_fold       INTEGER NOT NULL DEFAULT 0;
+            UPDATE schema_info SET version = 3;
+            """, transaction);
+        transaction.Commit();
+        Log.Information("Job database upgraded to schema v3");
     }
 
     /// <summary>v2: per-job invoice settings and the per-page colour classification.</summary>
@@ -217,7 +244,9 @@ public sealed class JobStore : IDisposable
                     state, current_batch, next_batch_due_utc,
                     created_utc, updated_utc, started_utc, finished_utc,
                     last_error, attention_reason, last_printer_status, consecutive_blocked,
-                    invoice_state, bw_page_price, colour_page_price, page_colour_map, invoice_printed_utc
+                    invoice_state, bw_page_price, colour_page_price, page_colour_map, invoice_printed_utc,
+                    page_selection, layout, duplex, paper, margin_mm, fold_gap_mm, scaling,
+                    booklet_binding, sheets_per_section, keep_back_cover, brochure_fold
                 ) VALUES (
                     $id, $pos, $path, $name, $size, $sha, $pages,
                     $title, $author, $producer, $ver, $enc,
@@ -226,7 +255,9 @@ public sealed class JobStore : IDisposable
                     $state, $cur, $due,
                     $created, $updated, $started, $finished,
                     $err, $att, $pstatus, $blocked,
-                    $inv, $bwprice, $colprice, $colmap, $invprinted
+                    $inv, $bwprice, $colprice, $colmap, $invprinted,
+                    $psel, $layout, $duplex, $paper, $margin, $foldgap, $scaling,
+                    $binding, $section, $backcover, $fold
                 );
                 """,
                 transaction,
@@ -247,7 +278,14 @@ public sealed class JobStore : IDisposable
                 ("$pstatus", job.LastPrinterStatus), ("$blocked", (long)job.ConsecutiveBlockedChecks),
                 ("$inv", (long)job.InvoiceState), ("$bwprice", Money(job.BlackWhitePagePrice)),
                 ("$colprice", Money(job.ColourPagePrice)), ("$colmap", job.PageColourMap),
-                ("$invprinted", Time(job.InvoicePrintedUtc)));
+                ("$invprinted", Time(job.InvoicePrintedUtc)),
+                ("$psel", (long)job.PrintSettings.PageSelection), ("$layout", (long)job.PrintSettings.Layout),
+                ("$duplex", (long)job.PrintSettings.Duplex), ("$paper", (long)job.PrintSettings.Paper),
+                ("$margin", Millimetres(job.PrintSettings.MarginMm)), ("$foldgap", Millimetres(job.PrintSettings.FoldGapMm)),
+                ("$scaling", (long)job.PrintSettings.Scaling), ("$binding", (long)job.PrintSettings.Binding),
+                ("$section", (long)job.PrintSettings.SheetsPerSignature),
+                ("$backcover", job.PrintSettings.KeepLastPageAsBackCover ? 1L : 0L),
+                ("$fold", (long)job.PrintSettings.Fold));
 
             foreach (var batch in job.Batches)
             {
@@ -372,6 +410,17 @@ public sealed class JobStore : IDisposable
                         var attempt = ReadAttempt(reader);
                         job.Batches.FirstOrDefault(b => b.Number == attempt.BatchNumber)?.Attempts.Add(attempt);
                     }
+                }
+
+                try
+                {
+                    job.AttachPlanToBatches();
+                }
+                catch (Exception ex)
+                {
+                    // Loading must never fail because of one job: the engine refuses to print a
+                    // job whose settings make no plan, and says so on screen.
+                    Log.Error(ex, "Job {Job} has print settings that do not make a print plan", job.Id);
                 }
             }
 
@@ -593,7 +642,46 @@ public sealed class JobStore : IDisposable
         ColourPagePrice = ParseMoney(GetString(r, "colour_page_price")),
         PageColourMap = GetString(r, "page_colour_map"),
         InvoicePrintedUtc = ParseTime(GetString(r, "invoice_printed_utc")),
+        PrintSettings = ReadPrintSettings(r),
     };
+
+    /// <summary>
+    /// A job's print settings. A value no version wrote - a hand-edited or damaged row - falls
+    /// back to that setting's default rather than being guessed at.
+    /// </summary>
+    private static PrintSettings ReadPrintSettings(IDataRecord r)
+    {
+        var defaults = PrintSettings.Default;
+        return new PrintSettings
+        {
+            PageSelection = Defined(GetLong(r, "page_selection"), defaults.PageSelection),
+            Layout = Defined(GetLong(r, "layout"), defaults.Layout),
+            Duplex = Defined(GetLong(r, "duplex"), defaults.Duplex),
+            Paper = Defined(GetLong(r, "paper"), defaults.Paper),
+            MarginMm = ParseMillimetres(GetString(r, "margin_mm")) ?? defaults.MarginMm,
+            FoldGapMm = ParseMillimetres(GetString(r, "fold_gap_mm")) ?? defaults.FoldGapMm,
+            Scaling = Defined(GetLong(r, "scaling"), defaults.Scaling),
+            Binding = Defined(GetLong(r, "booklet_binding"), defaults.Binding),
+            SheetsPerSignature = (int)Math.Clamp(GetLong(r, "sheets_per_section") ?? 0, 0, PrintSettings.MaxSheetsPerSignature),
+            KeepLastPageAsBackCover = (GetLong(r, "keep_back_cover") ?? 0) != 0,
+            Fold = Defined(GetLong(r, "brochure_fold"), defaults.Fold),
+        };
+    }
+
+    private static T Defined<T>(long? value, T fallback) where T : struct, Enum
+    {
+        if (value is null || value < int.MinValue || value > int.MaxValue) return fallback;
+        var candidate = (T)Enum.ToObject(typeof(T), (int)value.Value);
+        return Enum.IsDefined(candidate) ? candidate : fallback;
+    }
+
+    // Millimetres as invariant text, like money: a REAL column would round-trip 6.35 as 6.3499999.
+    private static string Millimetres(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private static double? ParseMillimetres(string? value) =>
+        double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var mm) && double.IsFinite(mm)
+            ? mm
+            : null;
 
     private static Batch ReadBatch(IDataRecord r) => new()
     {

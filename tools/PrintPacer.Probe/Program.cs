@@ -31,6 +31,7 @@ switch (command)
     case "verify": Verify(); break;
     case "rendercheck": RenderCheck(); break;
     case "makeicon": IconBuilder.Write(args[1]); Console.WriteLine($"  wrote {args[1]}"); break;
+    case "png": Png(); break;
     case "makepdf":
         TestPdfBuilder.Write(args[1], int.Parse(args[2]), args.Length > 3 ? args[3] : $"PrintPacer fixture - {args[2]} pages");
         Console.WriteLine($"  wrote {args[1]} ({args[2]} pages)");
@@ -48,6 +49,7 @@ switch (command)
               colour [printerName]                 ask each driver whether it accepts black & white
               verify <printed.pdf> <source.pdf> [expectedFirst expectedLast]
                                                    identify which source pages were printed
+              png <file.pdf> <outDir> [dpi]        render each page to a PNG, to look at a layout
             """);
         break;
 }
@@ -437,4 +439,29 @@ static double Distance(float[] a, float[] b)
         total += d * d;
     }
     return Math.Sqrt(total / a.Length);
+}
+
+void Png()
+{
+    var source = args[1];
+    var outDir = args[2];
+    var dpi = args.Length > 3 ? double.Parse(args[3]) : 60;
+    Directory.CreateDirectory(outDir);
+
+    var pages = OutputInspector.Render(source, dpi);
+    for (var i = 0; i < pages.Count; i++)
+    {
+        var page = pages[i];
+        using var bitmap = new System.Drawing.Bitmap(page.PixelWidth, page.PixelHeight);
+        for (var y = 0; y < page.PixelHeight; y++)
+        for (var x = 0; x < page.PixelWidth; x++)
+        {
+            var v = page.Luminance[y * page.PixelWidth + x];
+            bitmap.SetPixel(x, y, System.Drawing.Color.FromArgb(v, v, v));
+        }
+
+        var path = Path.Combine(outDir, $"page-{i + 1}.png");
+        bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+        Console.WriteLine($"  {path}  {page.WidthPt:0} x {page.HeightPt:0} pt");
+    }
 }

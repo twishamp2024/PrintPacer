@@ -28,6 +28,14 @@ public sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? LegacyGrayscale { get; set; }
 
+    /// <summary>
+    /// Paper, margins, scaling, binding, sections and fold from the last booklet or brochure,
+    /// offered again so they need not be re-entered. Only the details are remembered: page
+    /// selection, layout and sides always start at all pages, normal, single-sided, so a plain
+    /// PDF never prints as a booklet because the previous one did.
+    /// </summary>
+    public PrintSettings LayoutDefaults { get; set; } = PrintSettings.Default;
+
     // ---- Invoice (remembered from the last job's setup screen) ----------------
     public bool PrintInvoice { get; set; }
     public decimal BlackWhitePagePrice { get; set; }

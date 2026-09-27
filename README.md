@@ -60,7 +60,7 @@ PrintPacer just asks you to confirm more often, which is the honest trade.
 **Requirements:** Windows 10 or 11, 64-bit. Nothing else — the build is
 self-contained, so .NET does not need to be installed.
 
-Double-click **`PrintPacer-Setup-1.2.0.exe`** (51 MB). It installs to
+Double-click **`PrintPacer-Setup-1.3.0.exe`** (51 MB). It installs to
 `C:\Program Files\PrintPacer`, adds a Start Menu shortcut, offers a Desktop
 shortcut, and registers a proper uninstaller in **Settings → Apps**.
 
@@ -85,8 +85,9 @@ install that needs no administrator rights at all.
 
 1. Drop a PDF onto the window (or use **Browse**, or right-click a PDF →
    **Open with → PrintPacer**).
-2. Check the printer, print mode (colour or black & white), pages per batch,
-   and rest period.
+2. Choose what to print — all, odd or even pages; a normal layout, a booklet or
+   a brochure; single- or double-sided — then check the printer, print mode
+   (colour or black & white), pages (or sheets) per batch, and rest period.
 3. Read the **What will happen** panel — it spells out every batch and its time
    before anything is committed.
 4. Press **START PRINTING**.

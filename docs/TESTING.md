@@ -24,7 +24,10 @@ different things that all look like "time passed": normal elapsed time, suspend
 **`TestPdfBuilder`** writes valid, uncompressed PDFs by hand against the base-14
 Helvetica font — no embedding, no compression, no library. Every page carries its
 own number in very large type, so printed output can be matched back to source
-pages.
+pages. On request it also draws a row of black and white cells encoding the page
+number, which survives being rasterised, shrunk onto a booklet panel and printed
+to a file: `OutputInspector` renders the printed file and the test decodes which
+page landed on which panel.
 
 ```powershell
 .\build.ps1                 # build, test, publish (stops if any test fails)
@@ -36,7 +39,7 @@ dotnet test tests\PrintPacer.Tests\PrintPacer.Tests.csproj
 ## Results
 
 ```
-Passed!  Failed: 0   Passed: 100   Skipped: 0   Total: 100   Duration: 26 s
+Passed!  Failed: 0   Passed: 201   Skipped: 0   Total: 201   Duration: 48 s
 ```
 
 Verified on .NET 8.0.425, Windows 11 24H2 (build 26200), x64, in both Debug and
@@ -51,6 +54,11 @@ Release, and run repeatedly to confirm no flakiness.
 | `InvoiceTests` | 15 | Colour detection, billing, printing the invoice once |
 | `ColourModeTests` | 12 | Print mode on every batch, restarts, old data, uncooperative drivers |
 | `WindowsPrintPathTests` | 3 | Black & white through the real driver and spooler, to a file |
+| `PrintPlanTests` | 57 | Odd/even selection, double-sided pairing, booklet imposition for 1–100 pages (folded and read back), sections, back cover, brochure panels, batching by sheet |
+| `ImpositionGeometryTests` | 9 | Panels, margins, fold gap, fit and shrink-only scaling |
+| `PrinterSetupTests` | 14 | DEVMODE duplex values and read-back; real drivers asked (never printed to) about duplex, paper, landscape and margins |
+| `PrintLayoutEngineTests` | 17 | Odd/even, duplex, booklet and brochure jobs through the real engine: batching, rests, counter verification, a printer that cannot duplex, a driver that drops it, restarts, the database, old databases, the invoice, remembered settings |
+| `ImposedPrintPathTests` | 4 | Booklet, mid-job booklet batch, tri-fold and odd pages printed through the real driver to a PDF and decoded panel by panel |
 
 ---
 
@@ -177,6 +185,30 @@ Print to PDF, black & white          DEVMODE colour     - warning raised, pages 
 `WindowsPrintPathTests` repeats this on every test run. The HP Ink Tank itself
 was not sent a black & white job: its driver accepts the setting, but no paper
 was printed to confirm the ink it used.
+
+### Double-sided, booklets and brochures on real drivers
+
+No physical duplex printing was done for this release: nothing was sent to the
+HP Ink Tank. What was verified, on every test run:
+
+- **The DEVMODE the driver would print with.** `PrinterSetupTests` builds it the
+  way `PrintDocument` does and reads it back. The HP Ink Tank 410's driver keeps
+  both `DMDUP_VERTICAL` (long edge) and `DMDUP_HORIZONTAL` (short edge), landscape
+  and A4; it does not list A3, and PrintPacer refuses A3 for it. Microsoft Print to
+  PDF declares no duplex, and a double-sided job for it is refused with a message
+  naming the setting.
+- **The printed output.** `ImposedPrintPathTests` prints booklet, brochure and
+  odd-page batches through `PdfiumPrintEngine` and the real Print to PDF driver,
+  then decodes every panel of the file it wrote. Ten pages as a booklet come out as
+  six landscape A4 pages reading `·|1, 2|·, 10|3, 4|9, 8|5, 6|7`; sheets 2–3 of a
+  right-bound Letter booklet as `3|14, 13|4, 5|12, 11|6`; a tri-fold as `2|6|1,
+  3|4|5`. Because that driver cannot turn paper over, sides come out as
+  consecutive pages; duplex itself is covered by the DEVMODE checks above and by
+  the queue read-back in `PrintLayoutEngineTests`.
+- **The application.** Run against a throwaway data folder (`--data-dir`), the
+  setup screen showed the booklet and brochure options, the sheet map, the
+  driver's verdict for each printer, and *Preview layout as PDF* produced the
+  imposed sheets. START PRINTING was not pressed on the real printer.
 
 ### PDFium pixel format
 

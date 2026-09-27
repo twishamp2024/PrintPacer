@@ -52,6 +52,7 @@ public sealed class SimulatedSpooler : ISpooler
             TotalPages = j.TotalPages,
             PagesPrinted = j.PagesPrinted,
             Monochrome = j.Monochrome,
+            Duplex = j.Duplex,
             Status = MapStatus(j.Status),
             StatusText = j.Status.ToString(),
         }).ToList();
@@ -105,6 +106,19 @@ public sealed class SimulatedPrintEngine : IPrintEngine
     /// </summary>
     public bool DriverIgnoresMonochrome { get; set; }
 
+    /// <summary>
+    /// Models a printer without double-sided printing: a double-sided request is refused before
+    /// anything is spooled, exactly as <see cref="PdfiumPrintEngine"/> refuses it after asking
+    /// the driver.
+    /// </summary>
+    public bool CannotDuplex { get; set; }
+
+    /// <summary>
+    /// Models a driver that accepts a double-sided request but stores the queued job as
+    /// single-sided, which the engine can only discover from the queue.
+    /// </summary>
+    public bool QueueShowsSingleSided { get; set; }
+
     public int SubmissionCount { get; private set; }
 
     public List<string> SubmittedTokens { get; } = new();
@@ -131,17 +145,27 @@ public sealed class SimulatedPrintEngine : IPrintEngine
         if (FailBeforeAnyOutput)
             return PrintResult.Failure("Simulated failure before any output.", started, beforeAnyOutput: true);
 
+        if (CannotDuplex && request.Setup.Duplex != DuplexMode.SingleSided)
+        {
+            return PrintResult.Failure(
+                $"\"{request.PrinterName}\" cannot print on both sides of the paper: its driver does not offer " +
+                "double-sided printing. Choose a printer that can, or - for a normal layout - print single-sided.",
+                started, beforeAnyOutput: true) with { SetupRejected = true };
+        }
+
+        var duplex = QueueShowsSingleSided ? DuplexMode.SingleSided : request.Setup.Duplex;
+
         if (FailAfterPartialOutput)
         {
             // Some of the pages reached the spooler before the failure, so a job exists and
             // paper may well come out - just not all of it. This is the dangerous case the
             // engine must never resend on its own.
             var partial = Math.Max(1, request.PageCount / 2);
-            _printer.Submit(request.DocumentToken, partial, monochrome);
+            _printer.Submit(request.DocumentToken, partial, monochrome, duplex);
             return PrintResult.Failure("Simulated failure after partial output.", started, beforeAnyOutput: false);
         }
 
-        _printer.Submit(request.DocumentToken, request.PageCount, monochrome);
+        _printer.Submit(request.DocumentToken, request.PageCount, monochrome, duplex);
 
         return new PrintResult
         {

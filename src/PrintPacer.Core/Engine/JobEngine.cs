@@ -53,6 +53,7 @@ public sealed class JobEngine : IAsyncDisposable
     private readonly List<PrintJob> _jobs = new();
     private readonly Dictionary<string, Deadline> _deadlines = new();
     private readonly Dictionary<string, DateTimeOffset> _lastBlockedNotice = new();
+    private readonly HashSet<string> _setupWarned = new();
 
     private readonly CancellationTokenSource _shutdown = new();
     private Task? _loop;
@@ -145,8 +146,15 @@ public sealed class JobEngine : IAsyncDisposable
 
     public Task<JobSnapshot> CreateJobAsync(PdfDocumentInfo document, string printerName,
         int pagesPerBatch, int delayMinutes, StartMode startMode, DateTimeOffset? startAtUtc,
-        int renderDpi, ColourMode colourMode, InvoiceRequest? invoice = null)
+        int renderDpi, ColourMode colourMode, InvoiceRequest? invoice = null, PrintSettings? printSettings = null)
     {
+        // What to print and how it is laid out is settled before the job exists, so a
+        // configuration that cannot produce a single sheet is refused here, not at 3 a.m.
+        var print = printSettings ?? PrintSettings.Default;
+        if (print.Problems() is { Count: > 0 } problems)
+            throw new ArgumentException(problems[0], nameof(printSettings));
+        var plan = PrintPlan.Build(print, document.PageCount);
+
         if (invoice is not null)
         {
             if (invoice.BlackWhitePagePrice < 0 || invoice.ColourPagePrice < 0)
@@ -179,12 +187,13 @@ public sealed class JobEngine : IAsyncDisposable
                 PdfVersion = document.PdfVersion,
                 IsEncrypted = document.IsEncrypted,
                 PrinterName = printerName,
-                PagesPerBatch = Math.Clamp(pagesPerBatch, 1, Math.Max(1, document.PageCount)),
+                PagesPerBatch = Math.Clamp(pagesPerBatch, 1, Math.Max(1, plan.UnitCount)),
                 DelayMinutes = Math.Max(0, delayMinutes),
                 StartMode = startMode,
                 ScheduledStartUtc = startMode == StartMode.AtTime ? startAtUtc : null,
                 RenderDpi = renderDpi,
                 ColourMode = colourMode,
+                PrintSettings = print,
                 InvoiceState = invoice is null ? InvoiceState.NotRequested : InvoiceState.Waiting,
                 BlackWhitePagePrice = invoice?.BlackWhitePagePrice ?? 0m,
                 ColourPagePrice = invoice?.ColourPagePrice ?? 0m,
@@ -194,23 +203,35 @@ public sealed class JobEngine : IAsyncDisposable
                 State = JobState.Draft,
             };
 
-            job.Batches.AddRange(PrintJob.PlanBatches(id, job.TotalPages,
-                Math.Clamp(pagesPerBatch, 1, Math.Max(1, document.PageCount))));
+            // Batching comes last: the plan has already selected and arranged the pages, so
+            // the batches divide finished sheets and cannot break a spread or a sheet's two sides.
+            job.Batches.AddRange(PrintJob.PlanBatches(id, job.Plan, job.PagesPerBatch));
 
             _store.InsertJob(job);
             _jobs.Add(job);
 
             Record(job, "Information", "Job", $"Job created for {job.FileName}",
-                $"{job.TotalPages} pages, {job.BatchCount} batches of up to {job.PagesPerBatch}, " +
+                $"{job.Plan.DescribeSize()}, {job.BatchCount} batches of up to {job.PagesPerBatch} " +
+                $"{job.Plan.UnitName(job.PagesPerBatch)}, " +
                 $"{job.DelayMinutes} min between batches, {job.ColourMode.Describe().ToLowerInvariant()}, " +
                 $"printer \"{job.PrinterName}\".");
+
+            if (job.PrintSettings != PrintSettings.Default)
+            {
+                Record(job, "Information", "Job", $"Print settings: {job.PrintSettings.Summary()}.",
+                    job.PrintSettings.IsImposed
+                        ? $"{job.PrintSettings.DescribeSpacing()}. {string.Join("; ", job.Plan.DescribeSheets(2))}."
+                        : null);
+            }
 
             if (job.WantsInvoice)
             {
                 var blackAndWhite = job.ColourMode == ColourMode.BlackAndWhite;
-                var colourPages = blackAndWhite ? 0 : job.PageColourMap!.Count(c => c == PageColourMap.Colour);
+                // Only the pages that will print: an odd- or even-page job never charges the others.
+                var selected = job.Plan.SelectedPages;
+                var colourPages = blackAndWhite ? 0 : selected.Count(p => PageColourMap.IsColour(job.PageColourMap!, p));
                 Record(job, "Information", "Invoice", "An invoice will print when the job finishes.",
-                    $"{job.TotalPages - colourPages} black & white page(s) at {job.BlackWhitePagePrice}, " +
+                    $"{selected.Count - colourPages} black & white page(s) at {job.BlackWhitePagePrice}, " +
                     $"{colourPages} colour page(s) at {job.ColourPagePrice}" +
                     (blackAndWhite ? " (printing in black & white, so none are charged as colour)." : "."));
             }
@@ -410,11 +431,13 @@ public sealed class JobEngine : IAsyncDisposable
         if (printedPages == batch.PageCount) { ConfirmBatchPrinted(jobId, batchNumber); return; }
 
         var resumeFrom = batch.FirstPage + printedPages;
+        var accepted = job.Plan.DescribeRange(batch.FirstPage, resumeFrom - 1);
+        var rest = job.Plan.DescribeRange(resumeFrom, batch.LastPage);
 
         batch.State = BatchState.Skipped;
         batch.PagesConfirmedPrinted = printedPages;
         batch.FinishedUtc = _clock.UtcNow;
-        batch.Note = $"Pages {batch.FirstPage}-{resumeFrom - 1} confirmed printed; the rest moved to a new batch.";
+        batch.Note = $"{accepted} confirmed printed; the rest moved to a new batch.";
         _store.UpdateBatch(batch);
 
         // The remainder becomes its own batch so the page bookkeeping stays exact.
@@ -426,14 +449,14 @@ public sealed class JobEngine : IAsyncDisposable
             LastPage = batch.LastPage,
             State = BatchState.Pending,
             Note = $"Remainder of batch {batch.Number} after it stopped part-way.",
+            Plan = job.Plan,
         };
 
         job.Batches.Add(remainder);
         _store.InsertBatchForExistingJob(remainder);
 
         Record(job, "Information", "Batch",
-            $"Batch {batchNumber} resumed: pages {batch.FirstPage}-{resumeFrom - 1} accepted, " +
-            $"pages {resumeFrom}-{batch.LastPage} queued as batch {remainder.Number}.");
+            $"Batch {batchNumber} resumed: {accepted} accepted, {rest} queued as batch {remainder.Number}.");
 
         job.AttentionReason = null;
         await ContinueAfterBatchAsync(job).ConfigureAwait(false);
@@ -484,12 +507,39 @@ public sealed class JobEngine : IAsyncDisposable
 
             foreach (var job in _jobs.Where(j => jobId is null || j.Id == jobId))
             {
+                if (job.TryGetPlan() is null)
+                {
+                    lines.Add($"Document      : {job.FileName}");
+                    lines.Add($"Print settings: unreadable ({job.PrintSettings.Summary()}); this job cannot print.");
+                    lines.Add("");
+                    continue;
+                }
+
                 lines.Add($"Document      : {job.FileName}");
                 lines.Add($"Source        : {job.SourcePath}");
                 lines.Add($"SHA-256       : {job.FileSha256}");
                 lines.Add($"Pages         : {job.TotalPages}");
+                lines.Add($"Printing      : {job.Plan.DescribeSize()}");
+                lines.Add($"Page selection: {job.PrintSettings.PageSelection.Describe()}");
+                lines.Add($"Layout        : {job.PrintSettings.Layout.Describe()}" +
+                          (job.PrintSettings.Layout switch
+                          {
+                              PrintLayout.Booklet => $", {job.PrintSettings.Binding.Describe().ToLowerInvariant()}" +
+                                                     (job.PrintSettings.SheetsPerSignature > 0
+                                                         ? $", sections of {job.PrintSettings.SheetsPerSignature} sheets"
+                                                         : ", one section") +
+                                                     (job.PrintSettings.KeepLastPageAsBackCover ? ", last page kept as back cover" : ""),
+                              PrintLayout.Brochure => $", {job.PrintSettings.Fold.Describe().ToLowerInvariant()}",
+                              _ => "",
+                          }));
+                lines.Add($"Sides         : {job.PrintSettings.Duplex.Describe()}");
+                if (job.PrintSettings.IsImposed)
+                {
+                    lines.Add($"Paper         : {job.PrintSettings.Paper.Describe()}, landscape");
+                    lines.Add($"Spacing       : {job.PrintSettings.DescribeSpacing()}");
+                }
                 lines.Add($"Printer       : {job.PrinterName}");
-                lines.Add($"Batch size    : {job.PagesPerBatch} pages");
+                lines.Add($"Batch size    : {job.PagesPerBatch} {job.Plan.UnitName(job.PagesPerBatch)}");
                 lines.Add($"Rest between  : {job.DelayMinutes} minutes");
                 lines.Add($"Print mode    : {job.ColourMode.Describe()}");
                 lines.Add($"State         : {job.State}");
@@ -519,7 +569,8 @@ public sealed class JobEngine : IAsyncDisposable
                 foreach (var batch in job.Batches.OrderBy(b => b.FirstPage))
                 {
                     lines.Add($"  Batch {batch.Number,-3} {batch.RangeLabel,-18} {batch.State,-15} " +
-                              $"confirmed {batch.PagesConfirmedPrinted}/{batch.PageCount}");
+                              $"confirmed {batch.PagesConfirmedPrinted}/{batch.PageCount} {job.Plan.UnitName(batch.PageCount)}" +
+                              (job.Plan.Unit == PrintUnit.Sheet ? $", {batch.Impressions} printed sides" : ""));
 
                     foreach (var attempt in batch.Attempts.OrderBy(a => a.AttemptNumber))
                     {
@@ -708,6 +759,22 @@ public sealed class JobEngine : IAsyncDisposable
             return;
         }
 
+        // ---- The print settings must still make a plan -----------------------
+        // They were valid when the job was created, so this only fails for a job whose stored
+        // settings were damaged. Printing it with different settings would be worse than stopping.
+        IReadOnlyList<PrintSide> sides;
+        try
+        {
+            sides = job.Plan.SidesFor(batch.FirstPage, batch.LastPage);
+        }
+        catch (Exception ex)
+        {
+            var reason = $"This job's print settings could not be applied ({ex.Message}). Nothing was sent.";
+            job.AttentionReason = reason;
+            Transition(job, JobState.NeedsAttention, reason);
+            return;
+        }
+
         // ---- The printer must be able to take work --------------------------
         var readiness = await CheckPrinterAsync(job, _shutdown.Token).ConfigureAwait(false);
         job.LastPrinterStatus = readiness.StatusText;
@@ -745,6 +812,9 @@ public sealed class JobEngine : IAsyncDisposable
             ColourMode = job.ColourMode,
             FitToPrintableArea = job.FitToPrintableArea,
             AutoRotate = job.AutoRotate,
+            Sides = sides,
+            Setup = job.PrintSettings.PrinterSetup,
+            Imposition = job.PrintSettings.IsImposed ? ImpositionOptions.From(job.PrintSettings) : null,
         };
 
         var cancellation = new CancellationTokenSource();
@@ -764,7 +834,10 @@ public sealed class JobEngine : IAsyncDisposable
         Record(job, "Information", "Batch",
             $"Batch {batch.Number} of {job.BatchCount} submitted ({batch.RangeLabel}).",
             $"Attempt {attempt.AttemptNumber}, spooler document \"{attempt.DocumentToken}\", " +
-            $"printer counter before: {counters?.Impressions?.ToString() ?? "unavailable"}.");
+            $"printer counter before: {counters?.Impressions?.ToString() ?? "unavailable"}." +
+            (job.PrintSettings == PrintSettings.Default
+                ? ""
+                : $" {request.PageCount} printed side(s); {job.PrintSettings.Summary()}."));
 
         Transition(job, JobState.PrintingBatch,
             $"Printing batch {batch.Number} of {job.BatchCount} ({batch.RangeLabel}).");
@@ -822,6 +895,7 @@ public sealed class JobEngine : IAsyncDisposable
                 attempt.State = AttemptState.Submitted;
                 _store.UpdateAttempt(attempt);
                 RecordColourSeenInQueue(job, run.Batch, mine);
+                RecordSidesSeenInQueue(job, run.Batch, mine);
             }
 
             if (mine.IsPrinting && !attempt.ObservedPrinting)
@@ -852,7 +926,7 @@ public sealed class JobEngine : IAsyncDisposable
             // A retained job has finished printing but is deliberately kept in the queue by
             // the driver. Treat it as finished rather than waiting for it to disappear.
             var finishedButRetained = mine.IsRetained && !mine.IsPrinting && !mine.IsSpooling &&
-                                      mine.PagesPrinted >= run.Batch.PageCount;
+                                      mine.PagesPrinted >= run.Batch.Impressions;
 
             if (!finishedButRetained)
             {
@@ -871,6 +945,13 @@ public sealed class JobEngine : IAsyncDisposable
 
         run.Result ??= await run.Submission.ConfigureAwait(false);
         run.LeftQueueUtc ??= _clock.UtcNow;
+
+        // Refused before anything was spooled: there is no counter movement to wait for.
+        if (run.Result.SetupRejected)
+        {
+            await ConcludeAttemptAsync(run, ct).ConfigureAwait(false);
+            return;
+        }
 
         // ---- Let the printer's physical counter settle ----------------------
         // The counter is updated by the device asynchronously, so reading it the instant
@@ -906,6 +987,35 @@ public sealed class JobEngine : IAsyncDisposable
     }
 
     /// <summary>
+    /// The same proof for double-sided printing: the DEVMODE Windows stored with the queued job
+    /// says whether the driver is really printing both sides. The engine checked before
+    /// spooling, so a mismatch here means the driver changed its mind - which the user hears
+    /// about, because a booklet printed on one side is not a booklet.
+    /// </summary>
+    private void RecordSidesSeenInQueue(PrintJob job, Batch batch, SpoolerJob queued)
+    {
+        var wanted = job.PrintSettings.Duplex;
+        if (wanted == DuplexMode.SingleSided) return;
+
+        if (queued.Duplex == wanted)
+        {
+            Record(job, "Information", "Printer",
+                $"Windows confirms batch {batch.Number} is set to {wanted.Describe().ToLowerInvariant()}.",
+                $"Print job #{queued.JobId} carries the double-sided setting.");
+        }
+        else if (queued.Duplex is { } other)
+        {
+            Record(job, "Warning", "Printer",
+                $"Windows shows batch {batch.Number} set to {other.Describe().ToLowerInvariant()}, " +
+                $"not {wanted.Describe().ToLowerInvariant()}.",
+                $"The driver replaced the double-sided setting on print job #{queued.JobId}. " +
+                "Check the sheets of this batch before continuing.");
+            NotifyUser(NotificationKind.Warning, $"Batch {batch.Number} may not be double-sided",
+                "The printer driver changed the double-sided setting. Check the printed sheets.", job);
+        }
+    }
+
+    /// <summary>
     /// Detects a batch that has stopped making progress. This is the exact failure the
     /// application exists to manage, so it is never answered by resubmitting.
     /// </summary>
@@ -924,9 +1034,10 @@ public sealed class JobEngine : IAsyncDisposable
         _store.UpdateAttempt(run.Attempt);
 
         var produced = run.Attempt.DeviceImpressionDelta;
+        var sidesWord = run.Job.Plan.Unit == PrintUnit.Page ? "sheets" : "printed sides";
         var detail = produced is { } count
-            ? $"The printer has produced {count} of {run.Batch.PageCount} sheets for this batch."
-            : $"Windows reports {run.Attempt.SpoolerPagesPrinted} of {run.Batch.PageCount} pages.";
+            ? $"The printer has produced {count} of {run.Batch.Impressions} {sidesWord} for this batch."
+            : $"Windows reports {run.Attempt.SpoolerPagesPrinted} of {run.Batch.Impressions} pages.";
 
         var reason =
             $"Batch {run.Batch.Number} has not progressed for {_settings.StallTimeoutMinutes} minutes. " +
@@ -962,7 +1073,7 @@ public sealed class JobEngine : IAsyncDisposable
             return now - run.LeftQueueUtc!.Value > CounterSettleInterval * 2;
         }
 
-        var expected = run.Attempt.DeviceImpressionsBefore.Value + run.Batch.PageCount;
+        var expected = run.Attempt.DeviceImpressionsBefore.Value + run.Batch.Impressions;
 
         run.Attempt.DeviceImpressionsAfter = counter;
         run.Attempt.DeviceJamEventsAfter = snapshot.JamEvents;
@@ -991,9 +1102,17 @@ public sealed class JobEngine : IAsyncDisposable
             .Any(j => string.Equals(j.Document, attempt.DocumentToken, StringComparison.Ordinal) &&
                       !j.IsRetained);
 
+        if (result.SetupRejected)
+        {
+            await HandleRejectedSetupAsync(run, result).ConfigureAwait(false);
+            return;
+        }
+
+        // The verifier compares printed sides: the spooler counts each side as a page, and the
+        // printer's counter counts impressions, which are sides too.
         var verdict = BatchVerifier.Decide(new VerificationInput
         {
-            ExpectedPages = batch.PageCount,
+            ExpectedPages = batch.Impressions,
             SpooledSuccessfully = result.Spooled,
             FailedBeforeAnyOutput = result.FailedBeforeAnyOutput,
             ObservedInQueue = attempt.ObservedInQueue,
@@ -1021,6 +1140,11 @@ public sealed class JobEngine : IAsyncDisposable
                 $"Batch {batch.Number} could not be guaranteed to print in black & white.", colourWarning);
         }
 
+        // Advice about the layout (a margin inside the printer's unprintable edge) is the same
+        // for every batch, so it is said once per job rather than after every batch.
+        if (result.SetupWarning is { } setupWarning && _setupWarned.Add(job.Id))
+            Record(job, "Warning", "Printer", "A print setting may not come out as intended.", setupWarning);
+
         _activeRun = null;
         run.Cancellation.Dispose();
 
@@ -1028,7 +1152,7 @@ public sealed class JobEngine : IAsyncDisposable
         {
             case AttemptState.Verified:
                 batch.State = BatchState.Completed;
-                batch.PagesConfirmedPrinted = verdict.ConfirmedPages;
+                batch.PagesConfirmedPrinted = batch.PageCount;
                 batch.FinishedUtc = _clock.UtcNow;
                 _store.UpdateBatch(batch);
 
@@ -1050,21 +1174,75 @@ public sealed class JobEngine : IAsyncDisposable
                 break;
 
             default:
+            {
+                var explanation = verdict.Explanation + PartialCountCaveat(job, batch, verdict.ConfirmedPages);
                 batch.State = BatchState.NeedsAttention;
-                batch.PagesConfirmedPrinted = verdict.ConfirmedPages;
-                batch.Note = verdict.Explanation;
+                batch.PagesConfirmedPrinted = job.Plan.UnitsProvenBy(batch.FirstPage, batch.LastPage, verdict.ConfirmedPages);
+                batch.Note = explanation;
                 _store.UpdateBatch(batch);
 
-                job.AttentionReason = verdict.Explanation;
+                job.AttentionReason = explanation;
                 Record(job, "Warning", "Batch",
-                    $"Batch {batch.Number} needs checking ({batch.RangeLabel}).", verdict.Explanation);
+                    $"Batch {batch.Number} needs checking ({batch.RangeLabel}).", explanation);
 
-                Transition(job, JobState.NeedsAttention, verdict.Explanation);
+                Transition(job, JobState.NeedsAttention, explanation);
                 NotifyUser(NotificationKind.Warning,
                     $"Check batch {batch.Number} before continuing",
-                    verdict.Explanation, job);
+                    explanation, job);
                 break;
+            }
         }
+    }
+
+    /// <summary>
+    /// For a sheet-based job, a part-way count of printed sides cannot say which sheets are
+    /// complete - a printer that turns the paper over by hand prints every front first - so no
+    /// resume point is offered, and the explanation says why.
+    /// </summary>
+    private static string PartialCountCaveat(PrintJob job, Batch batch, int confirmedSides)
+    {
+        if (confirmedSides <= 0 || confirmedSides >= batch.Impressions) return "";
+        if (job.Plan.UnitsProvenBy(batch.FirstPage, batch.LastPage, confirmedSides) > 0) return "";
+        return $" This batch prints {batch.Impressions} sides on {batch.PageCount} sheet(s), and a count of printed sides " +
+               "cannot tell which sheets are complete, so check the sheets themselves.";
+    }
+
+    /// <summary>
+    /// The driver would not take the job's sides, paper or orientation, so nothing was sent.
+    /// Sending it again would fail the same way, so the job waits - with its settings and every
+    /// batch intact - for the user to fix the printer and press Resume, or cancel.
+    /// </summary>
+    private async Task HandleRejectedSetupAsync(ActiveRun run, PrintResult result)
+    {
+        var job = run.Job;
+        var batch = run.Batch;
+        var attempt = run.Attempt;
+
+        attempt.State = AttemptState.Failed;
+        attempt.FinishedUtc = _clock.UtcNow;
+        attempt.Error = result.Error;
+        attempt.VerdictExplanation = "Nothing was sent: the printer driver would not accept this job's print settings.";
+        _store.UpdateAttempt(attempt);
+
+        _activeRun = null;
+        run.Cancellation.Dispose();
+
+        batch.State = BatchState.Pending;
+        batch.Note = result.Error;
+        _store.UpdateBatch(batch);
+
+        var reason = $"{result.Error} Batch {batch.Number} ({batch.RangeLabel}) was not sent. " +
+                     "Fix the printer settings and press Resume, or cancel the job.";
+        job.AttentionReason = reason;
+        job.LastError = result.Error;
+
+        Record(job, "Error", "Printer", $"Batch {batch.Number} was not sent: the printer would not accept the print settings.",
+            result.Error);
+        Transition(job, JobState.NeedsAttention, reason);
+        NotifyUser(NotificationKind.Problem, "Printer settings not accepted", reason, job);
+        ReleasePowerIfIdle();
+
+        await Task.CompletedTask;
     }
 
     private async Task HandleDefinitelyFailedBatchAsync(PrintJob job, Batch batch, VerificationVerdict verdict)
@@ -1169,16 +1347,21 @@ public sealed class JobEngine : IAsyncDisposable
         job.NextBatchDueUtc = null;
         ClearDeadline(job);
 
-        var pages = job.Batches.Where(b => b.State is BatchState.Completed or BatchState.Skipped)
-                               .Sum(b => b.PageCount);
+        var done = job.Batches.Where(b => b.State is BatchState.Completed or BatchState.Skipped).ToList();
+        var pages = done.SelectMany(b => b.SourcePages).Distinct().Count();
+        var sheets = done.Sum(b => b.PageCount);
+        var what = job.Plan.Unit == PrintUnit.Page ? $"{pages} pages" : $"{pages} pages, on {sheets} sheets,";
 
-        Record(job, "Information", "Job", $"Job complete: all {pages} pages of {job.FileName} printed.");
-        Transition(job, JobState.Completed, $"All {pages} pages printed.");
+        Record(job, "Information", "Job", $"Job complete: all {what} of {job.FileName} printed.",
+            job.PrintSettings == PrintSettings.Default ? null : job.PrintSettings.Summary() + ".");
+        Transition(job, JobState.Completed, job.Plan.Unit == PrintUnit.Page
+            ? $"All {pages} pages printed."
+            : $"All {sheets} sheets printed ({pages} pages).");
 
         if (_settings.NotifyOnJobComplete)
         {
             NotifyUser(NotificationKind.Success, "Printing finished",
-                $"All {pages} pages of {job.FileName} have been printed.", job);
+                $"All {what.TrimEnd(',')} of {job.FileName} have been printed.", job);
         }
 
         if (job.InvoiceState == InvoiceState.Waiting) BeginInvoicePrint(job);
@@ -1631,7 +1814,7 @@ public sealed class JobEngine : IAsyncDisposable
 
         var counters = await ReadCountersAsync(job, CancellationToken.None).ConfigureAwait(false);
         if (counters?.Impressions is not { } after) return false;
-        if (after - before != batch.PageCount) return false;
+        if (after - before != batch.Impressions) return false;
 
         attempt.DeviceImpressionsAfter = after;
         attempt.DeviceJamEventsAfter = counters.Value.JamEvents;
@@ -1640,7 +1823,7 @@ public sealed class JobEngine : IAsyncDisposable
         attempt.Evidence |= CompletionEvidence.DeviceCounterMatched;
         attempt.FinishedUtc ??= _clock.UtcNow;
         attempt.VerdictExplanation =
-            $"The printer's page counter advanced by exactly {batch.PageCount} while " +
+            $"The printer's page counter advanced by exactly {batch.Impressions} while " +
             $"{AppPaths.ProductName} was closed, which confirms this batch printed.";
         _store.UpdateAttempt(attempt);
 
@@ -1695,13 +1878,13 @@ public sealed class JobEngine : IAsyncDisposable
             attempt.State = AttemptState.Ambiguous;
             attempt.VerdictExplanation =
                 $"This batch was still in the Windows queue when {AppPaths.ProductName} restarted " +
-                $"({stillThere.PagesPrinted} of {batch.PageCount} pages reported). " +
+                $"({stillThere.PagesPrinted} of {batch.Impressions} pages reported). " +
                 "Let it finish, or cancel it, then confirm what printed.";
             _store.UpdateAttempt(attempt);
 
             batch.State = BatchState.NeedsAttention;
             batch.Note = attempt.VerdictExplanation;
-            batch.PagesConfirmedPrinted = Math.Min(stillThere.PagesPrinted, batch.PageCount);
+            batch.PagesConfirmedPrinted = job.Plan.UnitsProvenBy(batch.FirstPage, batch.LastPage, stillThere.PagesPrinted);
             _store.UpdateBatch(batch);
 
             return new AttemptRecovery(true,
@@ -1719,7 +1902,7 @@ public sealed class JobEngine : IAsyncDisposable
 
         var verdict = BatchVerifier.Decide(new VerificationInput
         {
-            ExpectedPages = batch.PageCount,
+            ExpectedPages = batch.Impressions,
             // We cannot know whether spooling completed, because we died during it.
             SpooledSuccessfully = attempt.State != AttemptState.SubmitPending,
             FailedBeforeAnyOutput = false,
@@ -1745,7 +1928,7 @@ public sealed class JobEngine : IAsyncDisposable
         {
             case AttemptState.Verified:
                 batch.State = BatchState.Completed;
-                batch.PagesConfirmedPrinted = verdict.ConfirmedPages;
+                batch.PagesConfirmedPrinted = batch.PageCount;
                 batch.FinishedUtc ??= _clock.UtcNow;
                 _store.UpdateBatch(batch);
                 RestPrinterAfterRecoveredBatch(job);
@@ -1762,8 +1945,8 @@ public sealed class JobEngine : IAsyncDisposable
 
             default:
                 batch.State = BatchState.NeedsAttention;
-                batch.PagesConfirmedPrinted = verdict.ConfirmedPages;
-                batch.Note = verdict.Explanation;
+                batch.PagesConfirmedPrinted = job.Plan.UnitsProvenBy(batch.FirstPage, batch.LastPage, verdict.ConfirmedPages);
+                batch.Note = verdict.Explanation + PartialCountCaveat(job, batch, verdict.ConfirmedPages);
                 _store.UpdateBatch(batch);
                 return new AttemptRecovery(true,
                     $"Batch {batch.Number} ({batch.RangeLabel}): {verdict.Explanation}");

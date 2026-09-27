@@ -55,7 +55,7 @@ PrintPacer.Core          No UI. Everything that must be correct.
 ├── Spooler/             Win32 print-spooler interop, behind ISpooler
 ├── Device/              IPP and HP LEDM clients, address discovery
 ├── Pdf/                 Document inspection
-├── Printing/            IPrintEngine and the PDFium implementation
+├── Printing/            Print plan and imposition, printer setup, IPrintEngine and PDFium
 ├── Persistence/         SQLite job store, settings store, paths
 ├── Engine/              The scheduler, the verifier, the clock
 ├── Simulation/          A software printer, for testing
@@ -151,6 +151,67 @@ Windows stores each job's DEVMODE with the job, so the monitor reads it back fro
 `JOB_INFO_2` when it first sees the batch in the queue, and logs that the queued
 job really is set to black and white — or warns that it is not. Colour jobs
 request `DMCOLOR_COLOR` exactly as before.
+
+### 4.5 Page selection, layout and sides: a pipeline before batching
+
+Odd/even pages, booklets, brochures and double-sided printing are stages of one
+pipeline, and batching comes last:
+
+```
+source PDF
+  → page selection        PrintPlan.SelectPages        all / odd / even
+  → layout (imposition)   Imposition.Normal/Booklet/Brochure   selected pages → sheets and sides
+  → printer setup         PrinterSetupCheck            sides, paper, orientation (the DEVMODE)
+  → batching              PrintJob.PlanBatches(plan)   whole units per batch
+  → scheduling, printing, verification                 unchanged
+```
+
+The job stores only its `PrintSettings`. `PrintPlan.Build(settings, pageCount)`
+is pure and deterministic, so the plan is rebuilt identically on every load and a
+batch recorded as units 4–6 means exactly the same paper after a restart.
+
+**Units.** A batch is still a `FirstPage`–`LastPage` range, but of the plan's
+*units*. For a plain single-sided job a unit is a page — the ranges, labels and
+numbers are exactly those of earlier versions, and old jobs load unchanged. For
+anything double-sided, and every booklet and brochure, a unit is a **physical
+sheet** with everything on both of its sides, and the setup screen says
+"sheets per batch". Batching therefore cannot split a sheet's front from its
+back, or one half of a booklet spread from the other.
+
+**Imposition.** A booklet pads the selected pages to a multiple of four and, for a
+section of *n* pages, puts `n−2s | 1+2s` on the front of sheet *s* and
+`2+2s | n−1−2s` on the back (right binding mirrors both), section by section. A
+brochure makes one leaflet per sheet from the next 4 (bi-fold) or 6 (tri-fold,
+letter fold) pages. An all-blank back is left off, and only ever occurs on the
+last sheet — a blank side in the middle of a job could be dropped by a driver and
+shift every later page to the wrong side. Tests fold every booklet from 1 to 100
+pages and read the pages back in order.
+
+**Drawing.** `PrintRequest.Sides` carries each side's panels. Plain sides are drawn
+by the original code path. Imposed sides are laid out by `ImpositionGeometry` on
+the *physical* sheet — size and unprintable offset read from the printer DC
+(`PHYSICALWIDTH`, `PHYSICALOFFSETX`), because .NET's `PrintableArea` stays in
+portrait coordinates when the page is landscape — and each page is rasterised once,
+straight from the source PDF, and scaled into its panel. There is still no
+intermediate file.
+
+**Printer setup.** Sides (`dmDuplex`: long edge = `DMDUP_VERTICAL`, short edge =
+`DMDUP_HORIZONTAL`), paper (`dmPaperSize`) and landscape (`dmOrientation`) are set
+through `PrinterSettings`/`PageSettings` and confirmed the same way as black and
+white: `PrinterSetupCheck` builds the DEVMODE `PrintDocument` will use and reads
+back what the driver kept. The setup screen runs it before a job exists; the print
+engine runs it before every batch. A refusal is a **setup rejection**: nothing is
+spooled, the batch stays pending, and the job waits for the user — it is not retried
+on a timer, because the same driver would refuse again. Single-sided jobs now ask for
+simplex explicitly, so a driver whose default is double-sided cannot put two pages on
+a sheet that batching counted as one. The monitor reads `dmDuplex` back from each
+queued job, as it does the colour.
+
+**Verification** compares *printed sides*: the spooler counts each side as a page and
+the device counter counts impressions. `Batch.Impressions` comes from the plan. A
+part-way count proves whole units only when each unit is one side; for double-sided
+work no resume point is offered, because a driver that duplexes by hand prints every
+front before any back.
 
 ---
 
@@ -360,8 +421,8 @@ Write volume is a handful of rows per batch, so there is nothing to gain from
 concurrency and a great deal to lose from a subtle interleaving bug.
 
 ```
-jobs      configuration and current state
-batches   page ranges and their outcomes
+jobs      configuration (including print settings, schema v3) and current state
+batches   unit ranges (pages, or sheets) and their outcomes
 attempts  one row per submission: document token, spooler job id,
           counters before and after, evidence flags, verdict text
 events    the human-readable timeline
@@ -408,7 +469,7 @@ deliberately sparse: a blocked printer notifies at most every 30 minutes.
 
 ## 11. Testing strategy
 
-70 automated tests, ~24 seconds, no hardware required.
+200 automated tests, ~40 seconds. No printer hardware required; the print-path tests use the virtual printers built into Windows and are skipped where those are absent.
 
 The engine runs its **real** loop against its **real** SQLite store; only the
 world outside the application is simulated. A pass means the shipped code paths
