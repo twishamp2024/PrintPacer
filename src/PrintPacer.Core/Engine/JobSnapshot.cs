@@ -24,6 +24,9 @@ public sealed record BatchSnapshot
     public int PagesConfirmedPrinted { get; init; }
     public string? Note { get; init; }
 
+    public DateTimeOffset? SubmittedUtc { get; init; }
+    public DateTimeOffset? FinishedUtc { get; init; }
+
     public int AttemptCount { get; init; }
     public int SpoolerPagesPrinted { get; init; }
     public string? LastSpoolerStatus { get; init; }
@@ -58,6 +61,8 @@ public sealed record BatchSnapshot
             Impressions = batch.Impressions,
             PagesConfirmedPrinted = batch.PagesConfirmedPrinted,
             Note = batch.Note,
+            SubmittedUtc = batch.SubmittedUtc,
+            FinishedUtc = batch.FinishedUtc,
             AttemptCount = batch.Attempts.Count,
             SpoolerPagesPrinted = attempt?.SpoolerPagesPrinted ?? 0,
             LastSpoolerStatus = attempt?.LastSpoolerStatus,
@@ -79,6 +84,15 @@ public sealed record BatchSnapshot
 public sealed record JobSnapshot
 {
     public required string Id { get; init; }
+
+    /// <summary>"Job #12": stable for the life of the job.</summary>
+    public int Number { get; init; }
+
+    /// <summary>Place in the print queue; lower goes first.</summary>
+    public int QueuePosition { get; init; }
+
+    public string Label => Number > 0 ? $"Job #{Number}" : "Job";
+
     public required string FileName { get; init; }
     public required string SourcePath { get; init; }
     public required string PrinterName { get; init; }
@@ -139,6 +153,20 @@ public sealed record JobSnapshot
     public bool IsTerminal => State is JobState.Completed or JobState.Failed or JobState.Cancelled;
     public bool IsActive => !IsTerminal && State != JobState.Draft;
 
+    /// <summary>Whether any batch of this job has ever been handed to the printer.</summary>
+    public bool HasSentAnything { get; init; }
+
+    /// <summary>Not started and nothing sent: still editable, reorderable and removable.</summary>
+    public bool IsWaiting => State is JobState.Draft or JobState.Queued && !HasSentAnything;
+
+    /// <summary>The job's own settings, exactly as stored with it.</summary>
+    public required JobConfiguration Configuration { get; init; }
+
+    /// <summary>The document as it was when the job was added.</summary>
+    public required DocumentIdentity Document { get; init; }
+
+    public DateTimeOffset CreatedUtc { get; init; }
+
     public BatchSnapshot? CurrentBatch => Batches.FirstOrDefault(b => b.Number == CurrentBatchNumber);
 
     public BatchSnapshot? NextPendingBatch => Batches
@@ -164,6 +192,12 @@ public sealed record JobSnapshot
     private static JobSnapshot From(PrintJob job, PrintPlan? plan) => new()
     {
         Id = job.Id,
+        Number = job.Number,
+        QueuePosition = job.QueuePosition,
+        HasSentAnything = job.HasSentAnything,
+        Configuration = job.Configuration,
+        Document = DocumentIdentity.Of(job),
+        CreatedUtc = job.CreatedUtc,
         FileName = job.FileName,
         SourcePath = job.SourcePath,
         PrinterName = job.PrinterName,

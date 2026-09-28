@@ -9,16 +9,28 @@ namespace PrintPacer.Core.Model;
 public sealed class AppSettings
 {
     // ---- Defaults for new jobs ---------------------------------------------
+    //
+    // Initial values only. Every PDF added becomes a job with its own copy of these (see
+    // JobConfiguration.FromDefaults); editing a job never writes back here. They change only
+    // when the user edits the defaults themselves, in Settings or with "Use as defaults".
     public int DefaultPagesPerBatch { get; set; } = 50;
     public int DefaultDelayMinutes { get; set; } = 60;
+
+    /// <summary>The default printer for new jobs. The JSON name predates the queue.</summary>
     public string? LastPrinterName { get; set; }
     public int RenderDpi { get; set; } = 300;
 
     /// <summary>
-    /// The print mode last chosen on the setup screen, offered again for the next job. Only a
-    /// starting point: every job has its own mode, picked on the setup screen and shown there.
+    /// The print mode new jobs start with. Only a starting point: every job has its own mode,
+    /// chosen on its setup screen and shown there.
     /// </summary>
     public ColourMode ColourMode { get; set; } = ColourMode.Colour;
+
+    /// <summary>
+    /// Single- or double-sided for new jobs. Page selection and layout always start at all pages
+    /// and normal: a default of "odd pages" or "booklet" would quietly misprint every plain PDF.
+    /// </summary>
+    public DuplexMode DefaultDuplex { get; set; } = DuplexMode.SingleSided;
 
     /// <summary>
     /// The "Render in greyscale" switch that 1.1 and earlier kept in the Settings window. Read
@@ -36,7 +48,7 @@ public sealed class AppSettings
     /// </summary>
     public PrintSettings LayoutDefaults { get; set; } = PrintSettings.Default;
 
-    // ---- Invoice (remembered from the last job's setup screen) ----------------
+    // ---- Invoice defaults for new jobs ------------------------------------------
     public bool PrintInvoice { get; set; }
     public decimal BlackWhitePagePrice { get; set; }
     public decimal ColourPagePrice { get; set; }
@@ -101,6 +113,17 @@ public sealed class AppSettings
     /// for a human.
     /// </summary>
     public bool AutoResumeUnambiguousJobs { get; set; } = true;
+
+    // ---- Print queue --------------------------------------------------------------
+    /// <summary>
+    /// When the job at the front of the queue stops to ask the user something - a batch in
+    /// doubt, a missing file, a printer setting the driver refused - carry on with the next job
+    /// rather than leaving the printer idle all night. The job that needs a decision keeps its
+    /// place, its settings and every unprinted batch, and nothing of it is resent. The queue
+    /// only moves on when none of that job's pages can still be in the Windows print queue; a
+    /// paused job always holds the queue.
+    /// </summary>
+    public bool ContinueQueueWhenJobNeedsDecision { get; set; } = true;
 
     // ---- Device integration ------------------------------------------------------
     /// <summary>

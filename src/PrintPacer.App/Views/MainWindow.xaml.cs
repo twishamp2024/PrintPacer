@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using PrintPacer.App.ViewModels;
@@ -9,8 +8,10 @@ namespace PrintPacer.App.Views;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
-    private readonly Brush _dropIdleBorder;
-    private readonly Brush _dropIdleBackground;
+    private readonly Brush _dropIdleStroke;
+    private readonly Brush _dropIdleFill;
+    private readonly Brush _queueDropIdleStroke;
+    private readonly Brush _queueDropIdleFill;
 
     /// <summary>Raised when the user closes the window, which hides rather than exits.</summary>
     public event Action? CloseRequested;
@@ -23,69 +24,64 @@ public partial class MainWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
 
-        _dropIdleBorder = DropTarget.BorderBrush;
-        _dropIdleBackground = DropTarget.Background;
+        _dropIdleStroke = DropTarget.Stroke;
+        _dropIdleFill = DropTarget.Fill;
+        _queueDropIdleStroke = QueueDropTarget.Stroke;
+        _queueDropIdleFill = QueueDropTarget.Fill;
     }
 
     // ---- Drag and drop -----------------------------------------------------
 
     private void OnDragOver(object sender, DragEventArgs e)
     {
-        var path = SinglePdfFrom(e);
-        e.Effects = path is null ? DragDropEffects.None : DragDropEffects.Copy;
+        var paths = DroppedFiles(e);
+        e.Effects = paths.Count == 0 ? DragDropEffects.None : DragDropEffects.Copy;
         e.Handled = true;
 
-        if (path is not null) HighlightDropZone(true);
+        if (paths.Count > 0) HighlightDropZone(true);
     }
 
     private void OnDragLeave(object sender, DragEventArgs e) => HighlightDropZone(false);
 
+    /// <summary>
+    /// Takes every dropped file. Each valid PDF becomes its own job; anything else - a Word
+    /// file, a folder, a damaged PDF - is listed in the queue with the reason, never ignored.
+    /// </summary>
     private void OnDrop(object sender, DragEventArgs e)
     {
         HighlightDropZone(false);
 
-        var path = SinglePdfFrom(e);
-        if (path is null) return;
+        var paths = DroppedFiles(e);
+        if (paths.Count == 0) return;
 
         e.Handled = true;
-        _viewModel.LoadDocument(path);
+        _viewModel.AddFiles(paths);
     }
 
     private void HighlightDropZone(bool active)
     {
-        if (DropTarget is null) return;
-
-        DropTarget.BorderBrush = active
-            ? (Brush)FindResource("Accent")
-            : _dropIdleBorder;
-
-        DropTarget.Background = active
-            ? (Brush)FindResource("AccentSoft")
-            : _dropIdleBackground;
+        foreach (var (target, idleStroke, idleFill) in new[]
+                 {
+                     (DropTarget, _dropIdleStroke, _dropIdleFill),
+                     (QueueDropTarget, _queueDropIdleStroke, _queueDropIdleFill),
+                 })
+        {
+            if (target is null) continue;
+            target.Stroke = active ? (Brush)FindResource("Accent") : idleStroke;
+            target.Fill = active ? (Brush)FindResource("AccentSoft") : idleFill;
+        }
     }
 
-    /// <summary>
-    /// Accepts exactly one PDF. Dropping a folder or a handful of files is far more likely
-    /// to be a mistake than a request, so it is refused rather than guessed at.
-    /// </summary>
-    private static string? SinglePdfFrom(DragEventArgs e)
-    {
-        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return null;
-        if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: 1 } paths) return null;
-
-        var path = paths[0];
-        if (!File.Exists(path)) return null;
-
-        return string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase)
-            ? path
-            : null;
-    }
+    private static IReadOnlyList<string> DroppedFiles(DragEventArgs e) =>
+        e.Data.GetDataPresent(DataFormats.FileDrop) && e.Data.GetData(DataFormats.FileDrop) is string[] paths
+            ? paths
+            : Array.Empty<string>();
 
     // ---- Chrome -------------------------------------------------------------
 
     private void OnSettings(object sender, RoutedEventArgs e)
     {
-        var window = new SettingsWindow(_viewModel.Settings.Clone()) { Owner = this };
+        var window = new SettingsWindow(_viewModel.Settings.Clone(), _viewModel.Printers.ToList()) { Owner = this };
         if (window.ShowDialog() == true && window.Result is { } updated)
         {
             _viewModel.ApplySettings(updated);

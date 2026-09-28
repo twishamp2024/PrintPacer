@@ -27,6 +27,10 @@ namespace PrintPacer.Core.Engine;
 ///
 ///   2. A batch is only ever resubmitted automatically when the evidence says with
 ///      certainty that nothing printed. Every other outcome stops and asks a human.
+///
+/// Jobs form one print queue. Each job keeps its own configuration, batches and recovery
+/// state; the queue only decides whose turn it is. Exactly one job has the printer at a time,
+/// and a job may send a batch only while it does - see <see cref="DispatchQueueAsync"/>.
 /// </summary>
 public sealed class JobEngine : IAsyncDisposable
 {
@@ -54,6 +58,23 @@ public sealed class JobEngine : IAsyncDisposable
     private readonly Dictionary<string, Deadline> _deadlines = new();
     private readonly Dictionary<string, DateTimeOffset> _lastBlockedNotice = new();
     private readonly HashSet<string> _setupWarned = new();
+
+    /// <summary>
+    /// Jobs that need a decision and that the queue has moved past (see
+    /// <see cref="AppSettings.ContinueQueueWhenJobNeedsDecision"/>). Not persisted: after a restart
+    /// the dispatcher checks again, with the Windows queue as it is then.
+    /// </summary>
+    private readonly HashSet<string> _setAside = new();
+
+    /// <summary>
+    /// The rest before the next queued job, per job. Worked out from stored times, but held as a
+    /// <see cref="Deadline"/> so that, like every other wait, a clock that moves backwards - or
+    /// was set differently before a restart - cannot stretch it beyond the rest itself.
+    /// </summary>
+    private readonly Dictionary<string, (DateTimeOffset Due, Deadline Deadline)> _queueRests = new();
+
+    /// <summary>How long the printer's page counter is given to settle after an invoice, before another job starts on it.</summary>
+    private static readonly TimeSpan InvoiceSettle = TimeSpan.FromSeconds(90);
 
     private readonly CancellationTokenSource _shutdown = new();
     private Task? _loop;
@@ -129,7 +150,7 @@ public sealed class JobEngine : IAsyncDisposable
     public async Task StartAsync()
     {
         _jobs.Clear();
-        _jobs.AddRange(_store.LoadAllJobs());
+        _jobs.AddRange(_store.LoadAllJobs().OrderBy(j => j.QueuePosition));
 
         var reports = await RecoverAsync().ConfigureAwait(false);
 
@@ -147,127 +168,300 @@ public sealed class JobEngine : IAsyncDisposable
     public Task<JobSnapshot> CreateJobAsync(PdfDocumentInfo document, string printerName,
         int pagesPerBatch, int delayMinutes, StartMode startMode, DateTimeOffset? startAtUtc,
         int renderDpi, ColourMode colourMode, InvoiceRequest? invoice = null, PrintSettings? printSettings = null)
+        => CreateJobAsync(document, new JobConfiguration
+        {
+            PrinterName = printerName,
+            PagesPerBatch = pagesPerBatch,
+            DelayMinutes = delayMinutes,
+            StartMode = startMode,
+            ScheduledStartUtc = startAtUtc,
+            RenderDpi = renderDpi,
+            ColourMode = colourMode,
+            PrintSettings = printSettings ?? PrintSettings.Default,
+            Invoice = invoice,
+        });
+
+    /// <summary>
+    /// Adds a document to the queue as a new job with its own configuration. The job is a draft:
+    /// nothing is sent until it is started (<see cref="StartJob"/> or <see cref="StartQueue"/>).
+    /// </summary>
+    public Task<JobSnapshot> CreateJobAsync(PdfDocumentInfo document, JobConfiguration configuration)
     {
         // What to print and how it is laid out is settled before the job exists, so a
         // configuration that cannot produce a single sheet is refused here, not at 3 a.m.
-        var print = printSettings ?? PrintSettings.Default;
-        if (print.Problems() is { Count: > 0 } problems)
-            throw new ArgumentException(problems[0], nameof(printSettings));
-        var plan = PrintPlan.Build(print, document.PageCount);
+        Validate(configuration, document.PageCount);
 
-        if (invoice is not null)
-        {
-            if (invoice.BlackWhitePagePrice < 0 || invoice.ColourPagePrice < 0)
-                throw new ArgumentOutOfRangeException(nameof(invoice), "Page prices cannot be negative.");
-
-            // Without a colour map the bill could only guess, and a guessed bill is a wrong
-            // one. Black and white is the exception: every page is charged as black and white.
-            if (colourMode != ColourMode.BlackAndWhite && !PageColourMap.IsValid(invoice.PageColourMap, document.PageCount))
-                throw new ArgumentException("The invoice needs the colour of every page.", nameof(invoice));
-        }
+        var identity = new DocumentIdentity(document.Path, document.FileName, document.FileSizeBytes,
+            document.Sha256, document.PageCount, document.Title, document.Author, document.Producer,
+            document.PdfVersion, document.IsEncrypted);
 
         var completion = new TaskCompletionSource<JobSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         Post(_ =>
         {
-            var id = Guid.NewGuid().ToString("N");
-            var now = _clock.UtcNow;
-
-            var job = new PrintJob
+            try
             {
-                Id = id,
-                SourcePath = document.Path,
-                FileName = document.FileName,
-                FileSizeBytes = document.FileSizeBytes,
-                FileSha256 = document.Sha256,
-                TotalPages = document.PageCount,
-                Title = document.Title,
-                Author = document.Author,
-                Producer = document.Producer,
-                PdfVersion = document.PdfVersion,
-                IsEncrypted = document.IsEncrypted,
-                PrinterName = printerName,
-                PagesPerBatch = Math.Clamp(pagesPerBatch, 1, Math.Max(1, plan.UnitCount)),
-                DelayMinutes = Math.Max(0, delayMinutes),
-                StartMode = startMode,
-                ScheduledStartUtc = startMode == StartMode.AtTime ? startAtUtc : null,
-                RenderDpi = renderDpi,
-                ColourMode = colourMode,
-                PrintSettings = print,
-                InvoiceState = invoice is null ? InvoiceState.NotRequested : InvoiceState.Waiting,
-                BlackWhitePagePrice = invoice?.BlackWhitePagePrice ?? 0m,
-                ColourPagePrice = invoice?.ColourPagePrice ?? 0m,
-                PageColourMap = invoice?.PageColourMap,
-                CreatedUtc = now,
-                UpdatedUtc = now,
-                State = JobState.Draft,
-            };
+                var id = Guid.NewGuid().ToString("N");
+                var position = _jobs.Count == 0 ? 1 : _jobs.Max(j => j.QueuePosition) + 1;
+                var job = PrintJob.Create(id, _store.AllocateJobNumber(), position, identity, configuration, _clock.UtcNow);
 
-            // Batching comes last: the plan has already selected and arranged the pages, so
-            // the batches divide finished sheets and cannot break a spread or a sheet's two sides.
-            job.Batches.AddRange(PrintJob.PlanBatches(id, job.Plan, job.PagesPerBatch));
+                _store.InsertJob(job);
+                _jobs.Add(job);
 
-            _store.InsertJob(job);
-            _jobs.Add(job);
+                Record(job, "Information", "Job", $"Job created for {job.FileName}",
+                    $"{job.Label}. {job.Plan.DescribeSize()}, {job.BatchCount} batches of up to {job.PagesPerBatch} " +
+                    $"{job.Plan.UnitName(job.PagesPerBatch)}, " +
+                    $"{job.DelayMinutes} min between batches, {job.ColourMode.Describe().ToLowerInvariant()}, " +
+                    $"printer \"{job.PrinterName}\".");
 
-            Record(job, "Information", "Job", $"Job created for {job.FileName}",
-                $"{job.Plan.DescribeSize()}, {job.BatchCount} batches of up to {job.PagesPerBatch} " +
-                $"{job.Plan.UnitName(job.PagesPerBatch)}, " +
-                $"{job.DelayMinutes} min between batches, {job.ColourMode.Describe().ToLowerInvariant()}, " +
-                $"printer \"{job.PrinterName}\".");
+                RecordConfigurationDetail(job);
 
-            if (job.PrintSettings != PrintSettings.Default)
-            {
-                Record(job, "Information", "Job", $"Print settings: {job.PrintSettings.Summary()}.",
-                    job.PrintSettings.IsImposed
-                        ? $"{job.PrintSettings.DescribeSpacing()}. {string.Join("; ", job.Plan.DescribeSheets(2))}."
-                        : null);
+                Notify(job);
+                completion.TrySetResult(JobSnapshot.From(job));
             }
-
-            if (job.WantsInvoice)
+            catch (Exception ex)
             {
-                var blackAndWhite = job.ColourMode == ColourMode.BlackAndWhite;
-                // Only the pages that will print: an odd- or even-page job never charges the others.
-                var selected = job.Plan.SelectedPages;
-                var colourPages = blackAndWhite ? 0 : selected.Count(p => PageColourMap.IsColour(job.PageColourMap!, p));
-                Record(job, "Information", "Invoice", "An invoice will print when the job finishes.",
-                    $"{selected.Count - colourPages} black & white page(s) at {job.BlackWhitePagePrice}, " +
-                    $"{colourPages} colour page(s) at {job.ColourPagePrice}" +
-                    (blackAndWhite ? " (printing in black & white, so none are charged as colour)." : "."));
+                completion.TrySetException(ex);
             }
-
-            Notify(job);
-            completion.TrySetResult(JobSnapshot.From(job));
             return Task.CompletedTask;
         });
 
         return completion.Task;
     }
 
-    public void StartJob(string jobId) => Post(async _ =>
+    /// <summary>Refuses, in the user's words, a configuration that cannot print this document.</summary>
+    private static void Validate(JobConfiguration configuration, int pageCount)
     {
-        var job = Find(jobId);
-        if (job is null || job.IsActive || job.IsTerminal) return;
+        if (configuration.Invoice is { } invoice && (invoice.BlackWhitePagePrice < 0 || invoice.ColourPagePrice < 0))
+            throw new ArgumentOutOfRangeException(nameof(configuration), "Page prices cannot be negative.");
 
-        job.StartedUtc ??= _clock.UtcNow;
-        job.LastError = null;
-        job.AttentionReason = null;
+        if (configuration.Problems(pageCount) is { Count: > 0 } problems)
+            throw new ArgumentException(problems[0], nameof(configuration));
 
-        if (job.StartMode == StartMode.AtTime && job.ScheduledStartUtc is { } scheduled && scheduled > _clock.UtcNow)
+        // Throws, with the reason, when the settings make no sheets from this document.
+        PrintPlan.Build(configuration.PrintSettings, pageCount);
+    }
+
+    private void RecordConfigurationDetail(PrintJob job)
+    {
+        if (job.PrintSettings != PrintSettings.Default)
         {
-            SetDeadline(job, scheduled, scheduled - _clock.UtcNow);
-            Transition(job, JobState.WaitingForStart,
-                $"Waiting until {scheduled.ToLocalTime():dd MMM HH:mm} to start.");
-            return;
+            Record(job, "Information", "Job", $"Print settings: {job.PrintSettings.Summary()}.",
+                job.PrintSettings.IsImposed
+                    ? $"{job.PrintSettings.DescribeSpacing()}. {string.Join("; ", job.Plan.DescribeSheets(2))}."
+                    : null);
         }
 
-        await TryStartNextBatchAsync(job).ConfigureAwait(false);
+        if (job.WantsInvoice)
+        {
+            var blackAndWhite = job.ColourMode == ColourMode.BlackAndWhite;
+            // Only the pages that will print: an odd- or even-page job never charges the others.
+            var selected = job.Plan.SelectedPages;
+            var colourPages = blackAndWhite ? 0 : selected.Count(p => PageColourMap.IsColour(job.PageColourMap!, p));
+            Record(job, "Information", "Invoice", "An invoice will print when the job finishes.",
+                $"{selected.Count - colourPages} black & white page(s) at {job.BlackWhitePagePrice}, " +
+                $"{colourPages} colour page(s) at {job.ColourPagePrice}" +
+                (blackAndWhite ? " (printing in black & white, so none are charged as colour)." : "."));
+        }
+    }
+
+    /// <summary>
+    /// Changes the configuration of a job that has not started. The job gets a new value and
+    /// batches planned afresh from it; no other job, and not the defaults, can be affected.
+    /// Refused - with the reason - once anything of the job has been sent.
+    /// </summary>
+    public Task<JobSnapshot> UpdateJobAsync(string jobId, JobConfiguration configuration)
+    {
+        var completion = new TaskCompletionSource<JobSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Post(_ =>
+        {
+            try
+            {
+                var index = _jobs.FindIndex(j => j.Id == jobId);
+                if (index < 0) throw new InvalidOperationException("That job is no longer in the queue.");
+
+                var job = _jobs[index];
+                if (!job.IsWaiting)
+                    throw new InvalidOperationException($"{job.Label} has already started, so its settings can no longer be changed.");
+
+                if (configuration == job.Configuration)
+                {
+                    completion.TrySetResult(JobSnapshot.From(job));
+                    return Task.CompletedTask;
+                }
+
+                Validate(configuration, job.TotalPages);
+
+                var updated = job.WithConfiguration(configuration, _clock.UtcNow);
+                updated.LastPrinterStatus = job.LastPrinterStatus;
+                _store.ReplaceConfiguration(updated);
+                _jobs[index] = updated;
+
+                Record(updated, "Information", "Job", "Settings changed.",
+                    $"{updated.Label}: {DescribeConfiguration(updated)}.");
+                RecordConfigurationDetail(updated);
+
+                Notify(updated);
+                completion.TrySetResult(JobSnapshot.From(updated));
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+            }
+            return Task.CompletedTask;
+        });
+
+        return completion.Task;
+    }
+
+    private static string DescribeConfiguration(PrintJob job) =>
+        $"{job.Plan.DescribeSize()}, {job.ColourMode.Describe().ToLowerInvariant()}, " +
+        $"{job.PrintSettings.Duplex.Describe().ToLowerInvariant()}, " +
+        $"{job.BatchCount} batch{(job.BatchCount == 1 ? "" : "es")} of up to {job.PagesPerBatch} {job.Plan.UnitName(job.PagesPerBatch)}, " +
+        $"{job.DelayMinutes} min between batches, printer \"{job.PrinterName}\"" +
+        (job.StartMode == StartMode.AtTime && job.ScheduledStartUtc is { } at
+            ? $", not before {at.ToLocalTime():dd MMM HH:mm}"
+            : "") +
+        (job.WantsInvoice ? ", with an invoice" : "");
+
+    /// <summary>
+    /// Starts a job: puts it in the print queue. It begins at once when no other job has the
+    /// printer, and otherwise when its turn comes. A single job therefore starts exactly as it
+    /// always did.
+    /// </summary>
+    public void StartJob(string jobId) => StartQueue(new[] { jobId });
+
+    /// <summary>
+    /// Puts draft jobs in the print queue - every draft when <paramref name="jobIds"/> is null -
+    /// to be printed one after another in queue order, each with its own settings.
+    /// </summary>
+    public void StartQueue(IEnumerable<string>? jobIds = null)
+    {
+        var wanted = jobIds?.ToHashSet();
+        Post(async _ =>
+        {
+            var queued = _jobs
+                .Where(j => j.State == JobState.Draft && (wanted is null || wanted.Contains(j.Id)))
+                .OrderBy(j => j.QueuePosition)
+                .ToList();
+
+            foreach (var job in queued)
+            {
+                job.LastError = null;
+                job.AttentionReason = null;
+                Transition(job, JobState.Queued, "Waiting its turn in the print queue.");
+                Record(job, "Information", "Queue", $"{job.Label} added to the print queue: {job.FileName}.",
+                    DescribeConfiguration(job) + ".");
+            }
+
+            // Straight away when the printer is free, so pressing Start is never followed by a pause.
+            await DispatchQueueAsync().ConfigureAwait(false);
+        });
+    }
+
+    /// <summary>Takes a queued job that has not started back out of the queue. It stays in the list as a draft.</summary>
+    public void HoldJob(string jobId) => Post(_ =>
+    {
+        var job = Find(jobId);
+        if (job is not { State: JobState.Queued, IsWaiting: true }) return Task.CompletedTask;
+
+        Transition(job, JobState.Draft, "Held back: it will not start until it is added to the queue again.");
+        Record(job, "Information", "Queue", $"{job.Label} held back from the print queue.");
+        return Task.CompletedTask;
     });
+
+    /// <summary>
+    /// Moves a job that has not started earlier (negative) or later (positive) among the other
+    /// jobs that have not started. Jobs already printing or finished keep their places. The new
+    /// order is stored before it takes effect.
+    /// </summary>
+    public void MoveJob(string jobId, int offset) => Post(_ =>
+    {
+        var job = Find(jobId);
+        if (job is not { IsWaiting: true } || offset == 0) return Task.CompletedTask;
+
+        var ordered = _jobs.OrderBy(j => j.QueuePosition).ToList();
+        var waiting = ordered.Where(j => j.IsWaiting).ToList();
+        var from = waiting.IndexOf(job);
+        var to = Math.Clamp(from + offset, 0, waiting.Count - 1);
+        if (to == from) return Task.CompletedTask;
+
+        // The waiting jobs trade their slots among themselves, so every other job stays put.
+        var slots = waiting.Select(j => j.QueuePosition).OrderBy(p => p).ToList();
+        waiting.RemoveAt(from);
+        waiting.Insert(to, job);
+
+        // Positions must be distinct for the order to mean anything; they are, unless an older
+        // database left duplicates, in which case everything is renumbered first.
+        if (slots.Distinct().Count() != slots.Count)
+        {
+            for (var i = 0; i < ordered.Count; i++) ordered[i].QueuePosition = i + 1;
+            slots = waiting.Select(j => j.QueuePosition).OrderBy(p => p).ToList();
+        }
+
+        for (var i = 0; i < waiting.Count; i++) waiting[i].QueuePosition = slots[i];
+
+        _store.SaveQueueOrder(_jobs);
+        SortJobs();
+
+        Record(job, "Information", "Queue",
+            $"{job.Label} moved to position {WaitingPosition(job)} of {_jobs.Count(j => j.IsWaiting)} in the queue.");
+
+        foreach (var moved in waiting) Notify(moved);
+        return Task.CompletedTask;
+    });
+
+    /// <summary>
+    /// Removes a job from the list. Allowed for a job that has not started - nothing of it was
+    /// ever sent - and for a finished one. A job still under way must be cancelled first, so its
+    /// batch and attempt records are never deleted from under the engine.
+    /// </summary>
+    /// <returns>Null when the job was removed; otherwise why not.</returns>
+    public Task<string?> RemoveJobAsync(string jobId)
+    {
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Post(_ =>
+        {
+            var job = Find(jobId);
+            string? refusal = job switch
+            {
+                null => null,
+                _ when _activeRun?.Job == job => "It has a batch in the printer's queue. Cancel the job first.",
+                { IsWaiting: true } => null,
+                { IsTerminal: true, InvoiceState: InvoiceState.Sending } => "Its invoice is being printed. Try again in a moment.",
+                { IsTerminal: true } => null,
+                _ => "It has started. Cancel it first; its record then stays until you remove it.",
+            };
+
+            if (job is not null && refusal is null)
+            {
+                Record(job, "Information", "Queue", $"{job.Label} removed from the list: {job.FileName}.",
+                    job.IsWaiting ? "It had not started; nothing of it was sent." : $"It had {job.State.ToString().ToLowerInvariant()}.");
+                _store.DeleteJob(job.Id);
+                _jobs.Remove(job);
+                _deadlines.Remove(job.Id);
+                _setAside.Remove(job.Id);
+                _queueRests.Remove(job.Id);
+                ReleasePowerIfIdle();
+            }
+
+            completion.TrySetResult(refusal);
+            return Task.CompletedTask;
+        });
+
+        return completion.Task;
+    }
 
     public void PauseJob(string jobId) => Post(_ =>
     {
         var job = Find(jobId);
         if (job is null || job.IsTerminal || job.State == JobState.Paused) return Task.CompletedTask;
+
+        // A job that has not started is held back instead (HoldJob): a paused job has the printer,
+        // so pausing one that is only waiting would stop the whole queue behind it.
+        if (job.State is JobState.Draft or JobState.Queued) return Task.CompletedTask;
 
         // A batch already in the queue is deliberately left alone: see PauseSemantics below.
         var note = _activeRun?.Job.Id == jobId
@@ -471,6 +665,7 @@ public sealed class JobEngine : IAsyncDisposable
         _store.DeleteJob(jobId);
         _jobs.Remove(job);
         _deadlines.Remove(jobId);
+        _setAside.Remove(jobId);
         ReleasePowerIfIdle();
     });
 
@@ -515,6 +710,7 @@ public sealed class JobEngine : IAsyncDisposable
                     continue;
                 }
 
+                lines.Add($"Job           : {job.Label}, queue position {job.QueuePosition}");
                 lines.Add($"Document      : {job.FileName}");
                 lines.Add($"Source        : {job.SourcePath}");
                 lines.Add($"SHA-256       : {job.FileSha256}");
@@ -672,7 +868,230 @@ public sealed class JobEngine : IAsyncDisposable
             await TickIdleJobAsync(job, ct).ConfigureAwait(false);
         }
 
+        if (_activeRun is null) await DispatchQueueAsync().ConfigureAwait(false);
+        if (_activeRun is null) SendDeferredInvoices();
+
         ReleasePowerIfIdle();
+    }
+
+    // ---- The print queue ----------------------------------------------------------
+
+    /// <summary>
+    /// Starts the next queued job when its turn has come.
+    ///
+    /// Its turn comes when no other job has the printer (<see cref="HoldsPrinter"/>) and the
+    /// printer has had its rest after the previous job on it. Queued jobs are taken strictly in
+    /// queue order - never by size, name or printer - and each runs with its own settings.
+    /// </summary>
+    private async Task DispatchQueueAsync()
+    {
+        if (_activeRun is not null) return;
+
+        var next = _jobs.Where(j => j.State == JobState.Queued).OrderBy(j => j.QueuePosition).FirstOrDefault();
+        if (next is null) return;
+
+        if (PrinterHolder() is { } holder)
+        {
+            if (!TrySetAside(holder, next))
+            {
+                SetQueueNote(next, holder.State == JobState.NeedsAttention
+                    ? $"Next in the queue. {holder.Label} ({holder.FileName}) needs your decision first."
+                    : $"Next in the queue, after {holder.Label} ({holder.FileName}).");
+                return;
+            }
+
+            if (PrinterHolder() is { } stillHeld)
+            {
+                SetQueueNote(next, $"Next in the queue, after {stillHeld.Label} ({stillHeld.FileName}).");
+                return;
+            }
+        }
+
+        // The printer rests between jobs exactly as it does between batches: printing the next
+        // document straight after the last batch of the previous one would defeat the pacing.
+        if (RestBeforeStarting(next) is { } rest && QueueRest(next, rest.Due, rest.Length) is { IsDue: false } deadline)
+        {
+            var starts = _clock.UtcNow + deadline.Remaining;
+            SetQueueNote(next, $"Next in the queue. Starts at {starts.ToLocalTime():HH:mm}, {rest.Reason}.");
+            if (_settings.KeepAwakeWhilePrinting && !_power.IsHoldingRequest)
+                _power.Acquire($"{AppPaths.ProductName} is waiting to print {next.FileName}");
+            return;
+        }
+
+        await BeginQueuedJobAsync(next).ConfigureAwait(false);
+    }
+
+    /// <summary>Gives a queued job the printer: its start time, if it has one, or its first batch.</summary>
+    private async Task BeginQueuedJobAsync(PrintJob job)
+    {
+        var resuming = job.HasSentAnything;
+        job.StartedUtc ??= _clock.UtcNow;
+        job.LastError = null;
+        job.AttentionReason = null;
+
+        var waiting = _jobs.Count(j => j != job && j.State == JobState.Queued);
+        Record(job, "Information", "Queue",
+            resuming ? $"{job.Label} continues: {job.FileName}." : $"{job.Label} started: {job.FileName}.",
+            waiting == 0 ? "No other jobs are waiting." : $"{waiting} more job(s) waiting in the queue.");
+
+        if (job.StartMode == StartMode.AtTime && job.ScheduledStartUtc is { } scheduled && scheduled > _clock.UtcNow)
+        {
+            SetDeadline(job, scheduled, scheduled - _clock.UtcNow);
+            Transition(job, JobState.WaitingForStart,
+                $"Waiting until {scheduled.ToLocalTime():dd MMM HH:mm} to start.");
+            return;
+        }
+
+        await TryStartNextBatchAsync(job).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Whether a job has the printer: it has started, is not finished, and the queue has not
+    /// moved past it. Only such a job may send a batch, and only one should exist.
+    /// </summary>
+    private bool HoldsPrinter(PrintJob job) =>
+        _activeRun?.Job == job ||
+        job.State switch
+        {
+            JobState.WaitingForStart or JobState.PreparingBatch or JobState.PrintingBatch or JobState.VerifyingBatch
+                or JobState.CoolingDown or JobState.BlockedPrinterOffline or JobState.BlockedPrinterError
+                or JobState.Paused => true,
+            JobState.NeedsAttention => !_setAside.Contains(job.Id),
+            _ => false,
+        };
+
+    /// <summary>The job that has the printer, other than <paramref name="except"/>, if any.</summary>
+    private PrintJob? PrinterHolder(PrintJob? except = null) =>
+        _jobs.Where(j => j != except && HoldsPrinter(j)).OrderBy(j => j.QueuePosition).FirstOrDefault();
+
+    /// <summary>
+    /// Moves the queue past a job that needs a decision, when that is allowed and safe.
+    ///
+    /// Safe means none of the job's pages can still be on their way to the printer: no batch in
+    /// flight, and no submission of a batch in doubt still in the Windows queue. Otherwise the
+    /// next job's pages could interleave with it, and its page counter would count both. The job
+    /// itself is untouched: it keeps its place, settings and unprinted batches, and waits for the
+    /// user, who can resolve it at any time.
+    /// </summary>
+    private bool TrySetAside(PrintJob holder, PrintJob next)
+    {
+        if (holder.State != JobState.NeedsAttention || !_settings.ContinueQueueWhenJobNeedsDecision) return false;
+        if (_activeRun?.Job == holder) return false;
+        if (holder.Batches.Any(b => b.State == BatchState.InFlight)) return false;
+
+        foreach (var batch in holder.Batches.Where(b => b.State is BatchState.NeedsAttention or BatchState.Failed))
+        {
+            if (batch.LatestAttempt is not { } attempt) continue;
+
+            var queued = _spooler.ListJobs(attempt.PrinterName, out var querySucceeded);
+            if (!querySucceeded) return false;   // could not ask is not "gone"
+            if (queued.Any(j => string.Equals(j.Document, attempt.DocumentToken, StringComparison.Ordinal) && !j.IsCompleted))
+                return false;
+        }
+
+        _setAside.Add(holder.Id);
+        Record(holder, "Warning", "Queue",
+            $"{holder.Label} needs your decision; the queue carries on with {next.Label}.",
+            $"{holder.FileName} keeps its place, its settings and every batch not yet printed. Nothing of it " +
+            "will be sent again until you decide. " + (holder.AttentionReason ?? ""));
+        NotifyUser(NotificationKind.Warning, $"{holder.Label} needs your decision",
+            $"{holder.FileName} is waiting for you. The queue has moved on to {next.FileName}.", holder);
+        return true;
+    }
+
+    /// <summary>
+    /// When the printer may start <paramref name="next"/>: after the rest the previous job on the
+    /// same printer asks for after its last batch, and after any invoice has left the printer.
+    /// Worked out from what is stored, so it holds across a restart.
+    /// </summary>
+    private (DateTimeOffset Due, TimeSpan Length, string Reason)? RestBeforeStarting(PrintJob next)
+    {
+        (DateTimeOffset Due, TimeSpan Length, string Reason)? latest = null;
+
+        foreach (var job in _jobs.Where(j => j != next &&
+                     string.Equals(j.PrinterName, next.PrinterName, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (job.InvoiceState == InvoiceState.Sending)
+                return (_clock.UtcNow + InvoiceSettle, InvoiceSettle, $"after the invoice for {job.Label} has printed");
+
+            var lastPrinted = job.Batches
+                .Select(b => b.State == BatchState.Completed ? b.FinishedUtc
+                    : b.State is BatchState.NeedsAttention or BatchState.Failed ? b.LatestAttempt?.FinishedUtc
+                    : null)
+                .Where(t => t is not null)
+                .Max();
+
+            if (lastPrinted is { } printed && job.DelayMinutes > 0)
+                Consider(printed, TimeSpan.FromMinutes(job.DelayMinutes),
+                    $"after the printer rests {job.DelayMinutes} min from {job.Label}");
+
+            if (job.InvoicePrintedUtc is { } invoice)
+                Consider(invoice, InvoiceSettle, $"after the invoice for {job.Label}");
+        }
+
+        return latest;
+
+        void Consider(DateTimeOffset from, TimeSpan length, string reason)
+        {
+            var due = from + length;
+            if (latest is null || due > latest.Value.Due) latest = (due, length, reason);
+        }
+    }
+
+    /// <summary>
+    /// The wait before <paramref name="job"/> may start, as a <see cref="Deadline"/>: due when the
+    /// wall clock reaches <paramref name="due"/>, or when the rest's full length has passed on the
+    /// monotonic clock - whichever is first. Kept while the stored times it came from stay the same.
+    /// </summary>
+    private Deadline QueueRest(PrintJob job, DateTimeOffset due, TimeSpan length)
+    {
+        if (_queueRests.TryGetValue(job.Id, out var held) && held.Due == due) return held.Deadline;
+
+        var planned = due - _clock.UtcNow;
+        var deadline = new Deadline(_clock, due, planned > length ? length : planned);
+        _queueRests[job.Id] = (due, deadline);
+        return deadline;
+    }
+
+    /// <summary>
+    /// A job whose batch was resolved by hand while another job had the printer waits for its
+    /// turn in the queue, at its old place, rather than printing in the middle of that job.
+    /// </summary>
+    private void ParkInQueue(PrintJob job, PrintJob holder)
+    {
+        ClearDeadline(job);
+        Transition(job, JobState.Queued, $"Waiting its turn: {holder.Label} ({holder.FileName}) has the printer.");
+        Record(job, "Information", "Queue",
+            $"{job.Label} will continue when its turn comes; {holder.Label} has the printer.");
+    }
+
+    /// <summary>Shows why the next queued job has not started, writing only when that changes.</summary>
+    private void SetQueueNote(PrintJob job, string note)
+    {
+        if (job.LastPrinterStatus == note) return;
+        job.LastPrinterStatus = note;
+        _store.UpdateJob(job);
+        Notify(job);
+    }
+
+    private int WaitingPosition(PrintJob job) =>
+        _jobs.Where(j => j.IsWaiting).OrderBy(j => j.QueuePosition).ToList().IndexOf(job) + 1;
+
+    private void SortJobs()
+    {
+        var ordered = _jobs.OrderBy(j => j.QueuePosition).ToList();
+        _jobs.Clear();
+        _jobs.AddRange(ordered);
+    }
+
+    /// <summary>
+    /// Sends invoices held back because another job's batch was on the same printer when their
+    /// job finished: one extra page mid-batch would throw that batch's page count out.
+    /// </summary>
+    private void SendDeferredInvoices()
+    {
+        foreach (var job in _jobs.Where(j => j is { State: JobState.Completed, InvoiceState: InvoiceState.Waiting }).ToList())
+            BeginInvoicePrint(job);
     }
 
     private async Task TickIdleJobAsync(PrintJob job, CancellationToken ct)
@@ -735,6 +1154,27 @@ public sealed class JobEngine : IAsyncDisposable
     private async Task TryStartBatchAsync(PrintJob job, Batch batch)
     {
         if (_activeRun is not null) return;
+
+        // Only the job that has the printer may send. Any other waits for its turn.
+        if (PrinterHolder(except: job) is { } holder)
+        {
+            ParkInQueue(job, holder);
+            return;
+        }
+
+        // A job taking the printer over - from the queue, or resumed by hand after the queue moved
+        // past it - first lets the printer rest from the job before it, as the queue would.
+        if (!HoldsPrinter(job) && RestBeforeStarting(job) is { } rest &&
+            QueueRest(job, rest.Due, rest.Length) is { IsDue: false } resting)
+        {
+            var starts = _clock.UtcNow + resting.Remaining;
+            ClearDeadline(job);
+            Transition(job, JobState.Queued, $"Next in the queue. Starts at {starts.ToLocalTime():HH:mm}, {rest.Reason}.");
+            Record(job, "Information", "Queue", $"{job.Label} will continue at {starts.ToLocalTime():HH:mm}, {rest.Reason}.");
+            return;
+        }
+
+        _queueRests.Remove(job.Id);
 
         ClearDeadline(job);
         job.CurrentBatchNumber = batch.Number;
@@ -1311,6 +1751,13 @@ public sealed class JobEngine : IAsyncDisposable
             return;
         }
 
+        // Resolved by hand while the queue had moved on to another job: finish that job first.
+        if (PrinterHolder(except: job) is { } holder)
+        {
+            ParkInQueue(job, holder);
+            return;
+        }
+
         var delay = TimeSpan.FromMinutes(Math.Max(0, job.DelayMinutes));
         if (delay <= TimeSpan.Zero)
         {
@@ -1364,7 +1811,28 @@ public sealed class JobEngine : IAsyncDisposable
                 $"All {what.TrimEnd(',')} of {job.FileName} have been printed.", job);
         }
 
-        if (job.InvoiceState == InvoiceState.Waiting) BeginInvoicePrint(job);
+        var waiting = _jobs.Count(j => j.State == JobState.Queued);
+        if (waiting > 0)
+        {
+            Record(job, "Information", "Queue", $"{job.Label} finished; {waiting} job(s) still waiting in the queue.",
+                job.DelayMinutes > 0
+                    ? $"The next job on \"{job.PrinterName}\" starts after the printer rests {job.DelayMinutes} min."
+                    : null);
+        }
+
+        if (job.InvoiceState == InvoiceState.Waiting)
+        {
+            // Another job's batch on the same printer would count the invoice page as its own.
+            if (_activeRun is { } run && run.Job != job &&
+                string.Equals(run.Job.PrinterName, job.PrinterName, StringComparison.OrdinalIgnoreCase))
+            {
+                Record(job, "Information", "Invoice", "The invoice will print once the batch now printing has finished.");
+            }
+            else
+            {
+                BeginInvoicePrint(job);
+            }
+        }
 
         ReleasePowerIfIdle();
     }
@@ -1684,7 +2152,8 @@ public sealed class JobEngine : IAsyncDisposable
     {
         var reports = new List<RecoveryReport>();
 
-        foreach (var job in _jobs.Where(j => !j.IsTerminal && j.State != JobState.Draft))
+        // Drafts and queued jobs have nothing in flight: they simply keep waiting, in order.
+        foreach (var job in _jobs.Where(j => !j.IsTerminal && j.State is not (JobState.Draft or JobState.Queued)))
         {
             var details = new List<string>();
             var needsDecision = false;
@@ -1743,6 +2212,13 @@ public sealed class JobEngine : IAsyncDisposable
 
             Record(job, needsDecision ? "Warning" : "Information", "Recovery",
                 $"Recovered unfinished job for {job.FileName}.", summary);
+        }
+
+        var queued = _jobs.Count(j => j.State == JobState.Queued);
+        if (queued > 0)
+        {
+            Record(null, "Information", "Recovery",
+                $"{queued} job(s) still waiting in the print queue; they will print in order.");
         }
 
         // After the loop above, which can itself find that a job finished while we were closed.
@@ -2032,11 +2508,12 @@ public sealed class JobEngine : IAsyncDisposable
         var previous = job.State;
         job.State = state;
         if (note is not null) job.LastPrinterStatus = note;
+        if (state != JobState.NeedsAttention) _setAside.Remove(job.Id);
 
         _store.UpdateJob(job);
 
         if (previous != state)
-            Log.Information("Job {Job} {From} -> {To}: {Note}", job.FileName, previous, state, note);
+            Log.Information("{Label} {Job} {From} -> {To}: {Note}", job.Label, job.FileName, previous, state, note);
 
         Notify(job);
     }
@@ -2066,11 +2543,13 @@ public sealed class JobEngine : IAsyncDisposable
         _store.AppendEvent(job?.Id, level, category, message, detail);
         EventAppended?.Invoke(new JobEvent(0, job?.Id, _clock.UtcNow, level, category, message, detail));
 
+        // The log file interleaves every job in the queue, so each line says which job it is.
+        var who = job is null ? "Queue" : $"{job.Label} {job.FileName}";
         switch (level)
         {
-            case "Error": Log.Error("{Category}: {Message} {Detail}", category, message, detail); break;
-            case "Warning": Log.Warning("{Category}: {Message} {Detail}", category, message, detail); break;
-            default: Log.Information("{Category}: {Message}", category, message); break;
+            case "Error": Log.Error("[{Who}] {Category}: {Message} {Detail}", who, category, message, detail); break;
+            case "Warning": Log.Warning("[{Who}] {Category}: {Message} {Detail}", who, category, message, detail); break;
+            default: Log.Information("[{Who}] {Category}: {Message}", who, category, message); break;
         }
     }
 
@@ -2092,9 +2571,26 @@ public sealed class JobEngine : IAsyncDisposable
         var needed = _activeRun is not null ||
                      _jobs.Any(j => j.State is JobState.CoolingDown or JobState.WaitingForStart
                                         or JobState.PrintingBatch or JobState.VerifyingBatch
-                                        or JobState.BlockedPrinterOffline or JobState.BlockedPrinterError);
+                                        or JobState.BlockedPrinterOffline or JobState.BlockedPrinterError) ||
+                     QueueWillMoveByItself();
 
         if (!needed) _power.Release();
+    }
+
+    /// <summary>
+    /// Whether queued jobs will start without anyone touching anything: nothing is holding the
+    /// printer for the user - a paused job, or one waiting on a decision the queue may not pass.
+    /// </summary>
+    private bool QueueWillMoveByItself()
+    {
+        if (!_jobs.Any(j => j.State == JobState.Queued)) return false;
+        return PrinterHolder() switch
+        {
+            null => true,
+            { State: JobState.Paused } => false,
+            { State: JobState.NeedsAttention } => _settings.ContinueQueueWhenJobNeedsDecision,
+            _ => true,
+        };
     }
 
     /// <summary>

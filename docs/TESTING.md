@@ -39,7 +39,7 @@ dotnet test tests\PrintPacer.Tests\PrintPacer.Tests.csproj
 ## Results
 
 ```
-Passed!  Failed: 0   Passed: 201   Skipped: 0   Total: 201   Duration: 48 s
+Passed!  Failed: 0   Passed: 233   Skipped: 0   Total: 233   Duration: 52 s
 ```
 
 Verified on .NET 8.0.425, Windows 11 24H2 (build 26200), x64, in both Debug and
@@ -59,6 +59,8 @@ Release, and run repeatedly to confirm no flakiness.
 | `PrinterSetupTests` | 14 | DEVMODE duplex values and read-back; real drivers asked (never printed to) about duplex, paper, landscape and margins |
 | `PrintLayoutEngineTests` | 17 | Odd/even, duplex, booklet and brochure jobs through the real engine: batching, rests, counter verification, a printer that cannot duplex, a driver that drops it, restarts, the database, old databases, the invoice, remembered settings |
 | `ImposedPrintPathTests` | 4 | Booklet, mid-job booklet batch, tri-fold and odd pages printed through the real driver to a PDF and decoded panel by panel |
+| `FileIntakeTests` | 5 | One or many PDFs dropped or picked (the `string[]` Windows supplies), files refused with a reason (Word file, damaged PDF, empty file, folder, missing file), duplicates in one drop, a PDF with an odd extension |
+| `PrintQueueTests` | 27 | Many jobs, one queue: a job per file, defaults copied not shared, one job's change reaching no other (also after a restart), per-job printer, colour, sides, batch size, rest and start time, order and reordering (persisted), hold, remove, cancel, one job at a time, rests between jobs (also with the clock moved back), a failing job isolated, carry-on switched off, a resolved job waiting its turn, pages possibly still queued holding the queue, restart and crash with the queue intact, an overnight run of five differently configured jobs, one invoice per job, the v3→v4 upgrade, job numbers never reused |
 
 ---
 
@@ -366,6 +368,59 @@ rebuild that happens to resemble it.
 
 ---
 
+## The print queue in the real window (1.4.0)
+
+Checked by running the real `MainWindow`, `MainViewModel`, `JobEngine` and SQLite
+store, wired to the simulated printer and an accelerated clock, in a throwaway
+harness with its own data folder. (The installed copy was running on the test
+machine, and its single-instance lock would have stopped a second copy of the
+application itself; the harness is not part of the repository.) **Nothing was
+printed on paper, and no real printer was used for these checks.**
+
+| Checked | How | Result |
+|---|---|---|
+| Seven files dropped at once (five PDFs, a .docx, a damaged PDF) | A real WPF `DragOver`/`Drop` on the window with a `FileDrop` data object | Five jobs, in drop order; both bad files listed with their reasons |
+| Three files picked in **Add PDFs…** | The real Windows file dialog, filled in with control messages | Three jobs; the one already in the list noted as a duplicate |
+| Five jobs set up five ways | Selecting each and changing its settings | Each row kept its own colour, sides, batch size and rest; re-selecting showed each job's own |
+| Reordering | ▲ on a waiting job | Printed in the new order |
+| Start with two jobs whose printer refused their settings | **START PRINTING** | The other three started; the two stayed, each with its reason |
+| Overnight run | Accelerated clock | One job at a time, own batches and rests, rest between jobs |
+| Crash mid-queue | Process killed, then restarted on the same data | Finished jobs stayed finished, waiting jobs kept their order and settings |
+| A job's file removed before its turn | File moved away, queue started | That job stopped for a decision with its batches kept; the next job printed |
+| Use as defaults, Copy to other jobs, Remove, Clear finished, Settings defaults | Buttons and confirmation boxes | As described in the user guide, after the fixes below |
+| One PDF, start to finish | Drop, set up, **START PRINTING** | Straight to the job screen, printing - the single-file workflow as before |
+
+Double-sided and booklet jobs could not be started in this harness: the setup check
+asks the real Windows driver, and the simulated printer is not a Windows printer.
+Their printing through the queue is covered by `PrintQueueTests` against the
+simulated printer, and by the existing print-path tests against real drivers.
+
+---
+
+## The calmer main window (1.4.0 layout)
+
+The main window was reorganised without changing what it does: flat sections
+instead of a card per setting, one **Start printing** (under the queue), a
+three-line "What will happen" with the schedule behind **View schedule**, and a
+simpler empty screen. Checked in the same harness as above, with the simulated
+printer and an accelerated clock; **nothing was printed on paper**. The
+harness also listened to WPF's binding trace, which was shown to catch a
+deliberately broken binding and reported none from the window itself.
+
+| Checked | How | Result |
+|---|---|---|
+| Empty queue | Window opened on an empty data folder | Drop area and **Browse files…** only; "How the queue works" opens and closes |
+| One PDF, then several at once, with a .docx and a damaged PDF | Real `Drop` events | One job each, in order; both bad files listed with their reasons |
+| Settings kept per job | Different colour, batch size, rest, layout, invoice and start time on each job, then re-selecting each | Each job showed its own; rows summarised them |
+| Reorder and remove | ▲ on a waiting job; ✕ answered **Yes** in the confirmation box | New order kept with each job's settings; removed job gone |
+| A batch size that is not a number | Typed "abc" | "What will happen" says why, once, in orange; the job keeps its last saved size |
+| Booklet, brochure, double-sided, odd pages | Changing the layout controls | Extra fields, sheet map and hints appear under Print settings; batch size reads "Sheets per batch" |
+| Start, rest between jobs, scheduled start, invoice | **Start printing**, accelerated clock | Jobs ran in order; the scheduled job held the one after it; the invoice printed and showed on the finished job |
+| Sizes | 1320 × 880 and the minimum 1100 × 640 | No sideways scrolling; at 1320 × 880 a plain job's settings and its summary fit without scrolling; at the minimum, long drop-down entries shorten with "…" |
+| Build and tests | `dotnet build -c Release`, `dotnet test` | Clean build, 233 tests passed |
+
+---
+
 ## Bugs this testing found
 
 Worth recording, because each was a genuine defect rather than a test problem.
@@ -379,6 +434,9 @@ Worth recording, because each was a genuine defect rather than a test problem.
 | No rest after a recovered batch | Flaky test | Next batch fired immediately at the moment the printer is hottest — defeating the entire purpose |
 | `PdfDocumentOpenMode.InformationOnly` | Build warning | Metadata silently always empty |
 | Two build output trees | Stale binary | Testing a binary that is not the one being changed |
+| Rest between jobs taken from stored wall-clock times alone | Running the queue window across a restart | A clock set back (or different after a restart) could hold the next job for hours |
+| Resuming a job by hand skipped the rest after the previous job | Reviewing the queue window | The printer would get no rest between two customers' jobs |
+| "Use as defaults" and "Copy to other jobs" saved the batch size clamped to the current document | Running the queue window | 25 per batch typed on an 18-page PDF became 18 for every later, longer PDF |
 
 ---
 

@@ -9,14 +9,173 @@ Sends a long PDF to your printer in chunks, with a rest in between each one, as
 partway through one continuous 200-page job will happily manage four separate
 50-page jobs spread across the night.
 
+It also keeps a **print queue**: add many customers' PDFs during the day, give
+each its own settings, press Start, and leave the computer and printer on. The
+jobs print one after another overnight, each in its own paced batches.
+
+---
+
+## The print queue
+
+The left of the window is the queue: every PDF you add is a job there, with its
+number, pages, settings and state.
+
+```
+Queue                                             Add PDFs…
+4 jobs · 343 pages · 1 printing · 2 waiting · 1 finished
+
+#3  Amit_Project.pdf                        ● Finished
+    37 pages · Colour · Single-sided
+    10 pages/batch · 5 min rest                                         ✕
+#1  Rahul_Assignment.pdf                    ● Resting
+    84 pages · Colour · Single-sided
+    20 pages/batch · 10 min rest
+    ▬▬▬▬▬▬▬▬▬▬░░░░░░░░░  40 / 84 pages
+#2  Priya_Notes.pdf                         ● Waiting
+    216 pages · B&W · Double-sided
+    30 sheets/batch · 20 min rest
+    Next in the queue, after Job #1 (Rahul_Assignment.pdf).         ▲ ▼ ✕
+#4  Resume.pdf                              ● Waiting
+    2 pages · Colour · Single-sided
+    2 pages/batch · 20 min rest                                     ▲ ▼ ✕
+
+- - - - - - - - - - -  Drop more PDFs here  - - - - - - - - - - -
+               [ Add 1 job to the queue ]
+                   Clear finished jobs
+```
+
+A row names its printer only when the jobs in the list do not all use the same
+one; hover over a row to see everything about it, the printer included. The
+selected job is lifted onto a white background with a blue bar at its left edge.
+
+The one **Start printing** button is here, under the queue, because it starts
+every job that is ready. **Clear finished jobs** appears once there is something
+finished to clear.
+
+### Adding many files at once
+
+Drop any number of files anywhere on the window, or use **Add PDFs…** /
+**Browse files…** and select several (Ctrl-click or Shift-click). **Open with →
+PrintPacer** on several files works too.
+
+- **Every PDF becomes its own job.** Files are never merged, so every customer's
+  document keeps its own settings, its own batches, its own invoice and its own
+  recovery, and can fail on its own without touching the others.
+- Files that cannot be printed — a Word document, a damaged PDF, a folder, a
+  file that has since been moved — are listed at the top of the queue with the
+  reason. They never stop the others from being added.
+- The same PDF added twice is added twice, as two jobs (that is how to print two
+  copies), with a note in case it was a mistake.
+
+### Each job has its own settings
+
+New jobs start from the **defaults for new jobs** (Settings): printer, print
+mode, single- or double-sided, batch size, rest, invoice and prices, render
+resolution. Page selection and layout always start at *all pages, normal*.
+
+Click a job to see its settings on the right. They are the same settings as the
+single-job setup screen below, and **they belong to that job only**: every change
+is saved to that job as you make it ("All changes saved"), and changing one job
+never changes another job or the defaults. So a shop can set:
+
+| Job | Settings |
+|---|---|
+| customer1.pdf | Colour · single-sided · 20 pages per batch · 10 min rest |
+| customer2.pdf | Black & white · double-sided · 30 sheets per batch · 20 min rest |
+| customer3.pdf | Colour · single-sided · 10 pages per batch · 5 min rest |
+| customer4.pdf | Black & white · booklet |
+
+Two links at the bottom of a job's settings save repetitive work:
+
+- **Copy to other jobs…** gives every other job that has not started a copy of
+  these settings (each keeps its own document and page colours, and can still be
+  changed on its own).
+- **Use as defaults** makes these the defaults for PDFs added from now on. Jobs
+  already in the list keep their own settings.
+
+Settings can be changed until the job starts. After that they are fixed, because
+the batches that have printed were planned from them.
+
+### Order
+
+The queue prints top to bottom. Move a job that has not started with **▲** and
+**▼**. Jobs that have started or finished keep their places. The order is saved,
+and survives a restart.
+
+### Starting
+
+**Start printing** (under the queue) starts every job that has not started, in
+list order. With jobs already printing it reads **Add n jobs to the queue**, and
+with nothing left to start, **Queue running**. A job with a problem PrintPacer already knows about — its
+file is gone, or its printer refuses its double-sided or paper setting — is not
+started; it is listed with the reason, so it can be fixed and started later.
+
+A waiting job can be **held back** (taken out of the queue without removing it)
+from its settings screen, and **removed** with **✕**.
+
+### What happens overnight
+
+- Jobs print **one at a time, in queue order**, each with its own settings, its
+  own batch size and its own rest between batches.
+- **The printer rests between jobs too**: the next job on the same printer starts
+  only after the rest the previous job asked for after its last batch. A job on a
+  different printer needs no such rest.
+- **Don't start before** on a job holds that job — and the jobs after it — until
+  its time. "Job 1 at 22:00, then job 2, then job 3" is simply job 1 with a start
+  time and jobs 2 and 3 after it.
+- Each job prints its **own invoice** when it finishes, if it asked for one.
+
+### When one job has a problem
+
+A job that needs you — a batch in doubt, a missing file, a printer setting the
+driver refused, a printer that stayed unavailable — stops and waits for you,
+**with every unprinted batch kept**. What happens to the rest of the queue is set
+in Settings → Overnight → *When a job needs my decision, carry on with the next
+job in the queue* (on by default):
+
+- **On:** the queue carries on with the next job, and the job that needs you is
+  marked **Needs your decision** / **Needs checking** / **Failed**. The queue only
+  moves on when none of that job's pages can still be in the Windows print queue
+  — otherwise the next job's pages could mix with them, and the page counter
+  could not tell the two apart.
+- **Off:** the queue waits for you.
+
+Either way nothing of the problem job is resent without you. When you resolve it
+(the buttons on its batches, or **Resume** after fixing the cause), it continues
+at its place in the queue: straight away if nothing else is printing — after the
+printer's rest — or after the job that is printing now.
+
+A **paused** job always holds the queue.
+
+### States in the queue
+
+| State | Meaning |
+|---|---|
+| Not started | In the list, not yet started. Settings can change. |
+| Waiting | In the queue, waiting its turn. Settings can still change. |
+| Waiting to continue | Resolved by hand while another job had the printer; continues when its turn comes. |
+| Scheduled HH:mm | Its turn came, and it waits for its *Don't start before* time. |
+| Printing | A batch is on its way to the printer. |
+| Resting | Resting the printer between this job's batches. |
+| Printer unavailable | The printer is offline or reports an error; PrintPacer re-checks. |
+| Paused | Paused by you. Holds the queue. |
+| Needs your decision / Needs checking / Failed | Waiting for you; see [When something needs your decision](#when-something-needs-your-decision). |
+| Finished | Every page printed. |
+| Cancelled | Cancelled by you. |
+
+**Clear finished jobs** removes finished and cancelled jobs from the list. Their
+activity stays in the log.
+
 ---
 
 ## Setting up a job
 
 ### 1. Add the PDF
 
-Drag it onto the window, press **Browse…**, or right-click the file in File
-Explorer and choose **Open with → PrintPacer**.
+Drag it onto the window, press **Browse files…**, or right-click the file in File
+Explorer and choose **Open with → PrintPacer**. Several at once is fine — see
+[The print queue](#the-print-queue). What follows describes one job's settings;
+every job in the queue has its own.
 
 You will see the filename, page count, file size, paper size, PDF version and —
 where the file has them — the title and author.
@@ -46,8 +205,8 @@ setting the driver prints with — not just shown on screen. PrintPacer asks the
 driver before the job starts and again before each batch, and reads the setting
 back from the Windows queue as each batch arrives (*"Windows confirms batch 2 is
 set to double-sided, flip on long edge."*). If the printer cannot print on both
-sides, the setup screen says so in red under the print settings and **START
-PRINTING** stays greyed out; nothing is ever printed single-sided in place of
+sides, the setup screen says so under the print settings and **Start printing**
+leaves that job out, with the reason; nothing is ever printed single-sided in place of
 double-sided.
 
 > Some printers without a duplex unit (many home inkjets) still offer
@@ -169,7 +328,7 @@ everything else is bookkeeping.
 `0` sends the next batch as soon as the previous one is verified, which is useful
 for testing but defeats the purpose in normal use.
 
-### 7. Start later (optional)
+### 7. Don't start before (optional)
 
 Tick **Start later** and give a date and a 24-hour time to begin at, say, 23:30.
 
@@ -194,7 +353,7 @@ heading or a photo does; black text that happens to be stored as RGB, or a grey
 scan, does not. If the print mode is **Black & white**, every page is charged at
 the black & white rate, because that is how it prints.
 
-**START PRINTING** waits until the colour check has finished (a few seconds for
+**Start printing** waits until the colour check has finished (a few seconds for
 a few hundred pages). Your prices are remembered for next time.
 
 When the last batch is verified, the invoice prints on the same printer as its
@@ -213,36 +372,45 @@ it is not there.
 
 ### 9. Read "What will happen"
 
-Before anything is sent, this panel spells out the actual plan:
+At the bottom of a job's settings, before anything is sent, three lines sum up
+the actual plan:
 
 ```
-Pages       200 pages
-Layout      Normal, one page per side, on the printer's paper
-Sides       Single-sided
-
-4 separate print jobs of up to 50 pages, 60 minute(s) apart, every one in black & white.
-    Batch 1:  Pages 1–50          Sat 23:00
-    Batch 2:  Pages 51–100        Sun 00:00
-    Batch 3:  Pages 101–150       Sun 01:00
-    Batch 4:  Pages 151–200       Sun 02:00
+What will happen
+200 pages · 4 batches · up to 50 pages per batch
+60 minutes between batches · every batch in black & white
+Starts after the 1 job(s) ahead of it in the queue
+› View schedule
 ```
 
-and for a booklet:
+**View schedule** opens the batch-by-batch list:
 
 ```
-Pages       14 pages on 4 sheets, 2 blank pages added
-Layout      Booklet, bound on the left, 2 pages per side, A4 landscape
-Sides       Double-sided, flip on short edge
-Spacing     6 mm margins, 12 mm at each fold, fit to panel, pages at about 65%
-
-2 separate print jobs of up to 2 sheets, 60 minute(s) apart, every one in colour.
-    Batch 1:  Sheets 1–2 · pages 1–4, 13–14   Sat 23:00
-    Batch 2:  Sheets 3–4 · pages 5–12         Sun 00:00
+Batch 1   Pages 1–50        at the start
+Batch 2   Pages 51–100      +1 h 00 min
+Batch 3   Pages 101–150     +2 h 00 min
+Batch 4   Pages 151–200     +3 h 00 min
 ```
 
-If that is not what you expected, fix it now.
+Times are counted from when the job starts, because in a queue that depends on
+the jobs ahead of it. They count the rests only: each batch also takes as long as
+the printer needs to print it.
 
-### 10. Press START PRINTING
+A booklet or brochure adds a line with what was worked out from its settings:
+the paper the driver will use, and how far the pages shrink.
+
+```
+14 pages on 4 sheets, 2 blank pages added · 2 batches · up to 2 sheets per batch
+60 minutes between batches · every batch in colour
+Starts as soon as you press Start printing
+Booklet, bound on the left, 2 pages per side, A4 landscape · 6 mm margins, …, pages at about 65%
+```
+
+If a setting cannot be used (a batch size that is not a number, a start time in
+the past) the first line says so instead, in orange. If the plan is not what you
+expected, fix it now.
+
+### 10. Press Start printing
 
 ---
 
@@ -255,10 +423,10 @@ textbook.pdf                                      [ Resting the printer ]
 100 / 200 pages                              Next batch in  42 min 18 s
 ████████████████████░░░░░░░░░░░░░░░░░░░░
 
-CURRENT BATCH                    NEXT BATCH
+Current batch                    Next batch
 Batch 2 of 4 · Pages 51–100      Batch 3 · Pages 101–150
 
-BATCHES
+Batches
 ✓  Batch 1   Pages 1–50      Printed
 ✓  Batch 2   Pages 51–100    Printed
 ○  Batch 3   Pages 101–150   Waiting
@@ -298,8 +466,9 @@ job pick itself up after a restart without you being there.
 | **Pause** | Stops the *next* batch being sent |
 | **Resume** | Carries on |
 | **Cancel queued batch** | Removes the batch currently in the Windows queue |
-| **Cancel job** | Stops everything; remaining batches are marked cancelled |
-| **Start a new job** | Available once a job has finished |
+| **Cancel job** | Stops everything; remaining batches are marked cancelled. The queue moves on to the next job |
+| **Remove from list** | Available once a job has finished or been cancelled |
+| **Hold back** | On a waiting job's settings: takes it out of the queue without removing it |
 
 ### What Pause can and cannot do
 
@@ -375,17 +544,29 @@ what it can from the printer's own page counter:
 Closing the application never loses a job. The plan, the progress and the
 evidence are all on disk.
 
+The whole queue is on disk too. After a restart, finished jobs stay finished and
+are never printed again, jobs that had not started are still waiting in the same
+order with their own settings, and only the job that was under way is recovered
+as above. The rest of the queue then carries on after it.
+
 ---
 
 ## Settings
 
 Most people never need these.
 
+**Defaults for new jobs** — printer, print mode, sides, batch size, rest between
+batches, and whether each job prints an invoice (with the page prices). Only the
+starting point for PDFs added from now on: jobs already in the list keep their
+own settings.
+
 **Overnight**
 - Keep the computer awake while a job is running *(on)*
 - Continue unfinished jobs automatically when PrintPacer starts *(on)* — applies
   only to jobs whose interrupted batches could be resolved with certainty;
   anything in doubt always waits for you
+- When a job needs my decision, carry on with the next job in the queue *(on)* —
+  see [When one job has a problem](#when-one-job-has-a-problem)
 - Start PrintPacer when I sign in to Windows *(off)*
 - Start minimised to the notification area *(off)*
 
@@ -393,8 +574,9 @@ Most people never need these.
 finished. Deliberately sparse: a blocked printer notifies at most every 30 minutes.
 
 **Printing**
-- Render resolution *(300 dpi)* — higher is slower and uses much more memory.
-  300 dpi matches what an inkjet actually puts on plain paper.
+- Render resolution *(300 dpi)* — the default for new jobs; each job can have its
+  own (**Render quality** on its settings). Higher is slower and uses much more
+  memory. 300 dpi matches what an inkjet actually puts on plain paper.
 
 **When something goes wrong**
 - Re-check the printer every *5* minutes

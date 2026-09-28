@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using PrintPacer.Core.Billing;
 using PrintPacer.Core.Engine;
 using PrintPacer.Core.Model;
@@ -104,15 +105,82 @@ public sealed class EngineHarness : IAsyncDisposable
     /// </summary>
     private volatile JobSnapshot? _latest;
 
+    /// <summary>The latest snapshot of every job, for tests that run several jobs through the queue.</summary>
+    private readonly ConcurrentDictionary<string, JobSnapshot> _byId = new();
+
     private async Task StartEngineAsync()
     {
         Engine.RecoveryCompleted += reports => LastRecovery = reports;
-        Engine.JobChanged += snapshot => _latest = snapshot;
+        Engine.JobChanged += snapshot =>
+        {
+            _latest = snapshot;
+            _byId[snapshot.Id] = snapshot;
+        };
 
         await Engine.StartAsync();
 
         // Recovery runs before the loop publishes anything, so seed from the store.
-        _latest = (await Engine.GetJobsAsync()).LastOrDefault();
+        var jobs = await Engine.GetJobsAsync();
+        _byId.Clear();
+        foreach (var job in jobs) _byId[job.Id] = job;
+        _latest = jobs.LastOrDefault();
+    }
+
+    /// <summary>One job, as the engine last published it.</summary>
+    public JobSnapshot Snapshot(string jobId) =>
+        _byId.TryGetValue(jobId, out var snapshot)
+            ? snapshot
+            : throw new InvalidOperationException($"No snapshot of job {jobId} has been published.");
+
+    /// <summary>Whether the job has been removed: gone from the engine, not merely unpublished.</summary>
+    public async Task<bool> IsGoneAsync(string jobId) => (await Engine.GetJobsAsync()).All(j => j.Id != jobId);
+
+    /// <summary>Writes another numbered test PDF next to the default one, as a second customer's file.</summary>
+    public PdfDocumentInfo AddDocument(int pages, string name, IReadOnlyCollection<int>? colourPages = null)
+    {
+        var path = Path.Combine(Root, name);
+        TestPdfBuilder.Write(path, pages, Path.GetFileNameWithoutExtension(name), colourPages);
+        return new PdfService().Load(path);
+    }
+
+    /// <summary>The configuration a job gets from the defaults, pointed at the simulated printer.</summary>
+    public JobConfiguration Config(int pagesPerBatch, int delayMinutes, ColourMode colourMode = ColourMode.Colour,
+        PrintSettings? printSettings = null) => new()
+    {
+        PrinterName = Printer.Name,
+        PagesPerBatch = pagesPerBatch,
+        DelayMinutes = delayMinutes,
+        ColourMode = colourMode,
+        PrintSettings = printSettings ?? PrintSettings.Default,
+    };
+
+    public Task<JobSnapshot> CreateJobAsync(PdfDocumentInfo document, JobConfiguration configuration) =>
+        Engine.CreateJobAsync(document, configuration);
+
+    /// <summary>Waits for one job to reach a state, driving the printer meanwhile.</summary>
+    public Task<bool> WaitForJobStateAsync(string jobId, JobState state, int timeoutMs = 10_000) =>
+        WaitUntilAsync(() => _byId.TryGetValue(jobId, out var job) && job.State == state, timeoutMs);
+
+    /// <summary>
+    /// Runs the whole queue to the end, skipping every rest as it comes up. Returns false if it
+    /// did not finish, or stopped for a decision.
+    /// </summary>
+    public async Task<bool> RunQueueToEndAsync(IReadOnlyCollection<string> jobIds, int timeoutMs = 60_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (jobIds.All(id => _byId.TryGetValue(id, out var j) && j.IsTerminal)) return true;
+
+            var waiting = await WaitUntilAsync(() =>
+                jobIds.All(id => _byId.TryGetValue(id, out var j) && j.IsTerminal) ||
+                _byId.Values.Any(j => jobIds.Contains(j.Id) && j.State is JobState.CoolingDown or JobState.WaitingForStart) ||
+                _byId.Values.Any(j => jobIds.Contains(j.Id) && j.State == JobState.Queued &&
+                                      j.LastPrinterStatus?.Contains("Starts at") == true), 2_000);
+
+            if (waiting) SkipDelay(24 * 60);
+        }
+        return jobIds.All(id => _byId.TryGetValue(id, out var j) && j.IsTerminal);
     }
 
     /// <summary>

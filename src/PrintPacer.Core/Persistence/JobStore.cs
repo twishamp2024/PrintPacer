@@ -23,7 +23,7 @@ namespace PrintPacer.Core.Persistence;
 public sealed class JobStore : IDisposable
 {
     private static readonly ILogger Log = Serilog.Log.ForContext<JobStore>();
-    private const int SchemaVersion = 3;
+    private const int SchemaVersion = 4;
 
     private readonly SqliteConnection _connection;
     private readonly object _gate = new();
@@ -84,7 +84,40 @@ public sealed class JobStore : IDisposable
 
             if (current < 2) UpgradeToV2();
             if (current < 3) UpgradeToV3();
+            if (current < 4) UpgradeToV4();
         }
+    }
+
+    /// <summary>
+    /// v4: the print queue. <c>queue_position</c> has existed since v1 but was always 0, so the
+    /// order jobs were created in becomes their queue order, and each job gets a stable number
+    /// ("Job #3") in the same order. States, batches and attempts are untouched: a job that was
+    /// half printed before the upgrade carries on exactly where it was.
+    /// </summary>
+    private void UpgradeToV4()
+    {
+        using var transaction = _connection.BeginTransaction();
+        Execute("ALTER TABLE jobs ADD COLUMN job_number INTEGER NOT NULL DEFAULT 0;", transaction);
+
+        var ids = new List<string>();
+        using (var command = Command("SELECT id FROM jobs ORDER BY queue_position, created_utc, id;", transaction))
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read()) ids.Add(reader.GetString(0));
+        }
+
+        for (var i = 0; i < ids.Count; i++)
+        {
+            Execute("UPDATE jobs SET queue_position = $n, job_number = $n WHERE id = $id;", transaction,
+                ("$n", (long)(i + 1)), ("$id", ids[i]));
+        }
+
+        // Job numbers are never reused, even after finished jobs are cleared from the list, so
+        // "Job #12" in last week's log is never a different document from today's.
+        Execute("ALTER TABLE schema_info ADD COLUMN next_job_number INTEGER NOT NULL DEFAULT 1;", transaction);
+        Execute("UPDATE schema_info SET version = 4, next_job_number = $next;", transaction, ("$next", (long)(ids.Count + 1)));
+        transaction.Commit();
+        Log.Information("Job database upgraded to schema v4 ({Count} existing job(s) numbered in creation order)", ids.Count);
     }
 
     /// <summary>
@@ -237,7 +270,7 @@ public sealed class JobStore : IDisposable
 
             Execute("""
                 INSERT INTO jobs (
-                    id, queue_position, source_path, file_name, file_size, file_sha256, total_pages,
+                    id, job_number, queue_position, source_path, file_name, file_size, file_sha256, total_pages,
                     title, author, producer, pdf_version, is_encrypted,
                     printer_name, pages_per_batch, delay_minutes, start_mode, scheduled_start_utc,
                     render_dpi, grayscale, fit_to_printable, auto_rotate,
@@ -248,7 +281,7 @@ public sealed class JobStore : IDisposable
                     page_selection, layout, duplex, paper, margin_mm, fold_gap_mm, scaling,
                     booklet_binding, sheets_per_section, keep_back_cover, brochure_fold
                 ) VALUES (
-                    $id, $pos, $path, $name, $size, $sha, $pages,
+                    $id, $number, $pos, $path, $name, $size, $sha, $pages,
                     $title, $author, $producer, $ver, $enc,
                     $printer, $ppb, $delay, $mode, $start,
                     $dpi, $gray, $fit, $rot,
@@ -261,7 +294,8 @@ public sealed class JobStore : IDisposable
                 );
                 """,
                 transaction,
-                ("$id", job.Id), ("$pos", 0L), ("$path", job.SourcePath), ("$name", job.FileName),
+                ("$id", job.Id), ("$number", (long)job.Number), ("$pos", (long)job.QueuePosition),
+                ("$path", job.SourcePath), ("$name", job.FileName),
                 ("$size", job.FileSizeBytes), ("$sha", job.FileSha256), ("$pages", (long)job.TotalPages),
                 ("$title", job.Title), ("$author", job.Author), ("$producer", job.Producer),
                 ("$ver", job.PdfVersion), ("$enc", job.IsEncrypted ? 1L : 0L),
@@ -287,21 +321,109 @@ public sealed class JobStore : IDisposable
                 ("$backcover", job.PrintSettings.KeepLastPageAsBackCover ? 1L : 0L),
                 ("$fold", (long)job.PrintSettings.Fold));
 
-            foreach (var batch in job.Batches)
-            {
-                Execute("""
-                    INSERT INTO batches (job_id, number, first_page, last_page, state,
-                                         submitted_utc, finished_utc, pages_confirmed, note)
-                    VALUES ($job, $num, $first, $last, $state, $sub, $fin, $conf, $note);
-                    """,
-                    transaction,
-                    ("$job", batch.JobId), ("$num", (long)batch.Number),
-                    ("$first", (long)batch.FirstPage), ("$last", (long)batch.LastPage),
-                    ("$state", (long)batch.State), ("$sub", Time(batch.SubmittedUtc)),
-                    ("$fin", Time(batch.FinishedUtc)), ("$conf", (long)batch.PagesConfirmedPrinted),
-                    ("$note", batch.Note));
-            }
+            InsertBatches(job, transaction);
+            transaction.Commit();
+        }
+    }
 
+    private void InsertBatches(PrintJob job, SqliteTransaction transaction)
+    {
+        foreach (var batch in job.Batches)
+        {
+            Execute("""
+                INSERT INTO batches (job_id, number, first_page, last_page, state,
+                                     submitted_utc, finished_utc, pages_confirmed, note)
+                VALUES ($job, $num, $first, $last, $state, $sub, $fin, $conf, $note);
+                """,
+                transaction,
+                ("$job", batch.JobId), ("$num", (long)batch.Number),
+                ("$first", (long)batch.FirstPage), ("$last", (long)batch.LastPage),
+                ("$state", (long)batch.State), ("$sub", Time(batch.SubmittedUtc)),
+                ("$fin", Time(batch.FinishedUtc)), ("$conf", (long)batch.PagesConfirmedPrinted),
+                ("$note", batch.Note));
+        }
+    }
+
+    /// <summary>
+    /// Stores a new configuration for a job that has not started, with the batches planned from
+    /// it, in one transaction: a crash leaves either the old settings and batches or the new ones.
+    ///
+    /// Refuses a job with any submission attempt on record. Re-planning its batches would detach
+    /// that history from the pages it printed, which is exactly the record recovery depends on.
+    /// </summary>
+    public void ReplaceConfiguration(PrintJob job)
+    {
+        lock (_gate)
+        {
+            using var transaction = _connection.BeginTransaction();
+
+            var attempts = QueryScalarLong("SELECT COUNT(*) FROM attempts WHERE job_id = $id;", transaction, ("$id", job.Id));
+            if (attempts > 0)
+                throw new InvalidOperationException($"{job.Label} has already sent pages to the printer; its settings cannot change.");
+
+            job.UpdatedUtc = DateTimeOffset.UtcNow;
+            Execute("""
+                UPDATE jobs SET
+                    printer_name = $printer, pages_per_batch = $ppb, delay_minutes = $delay,
+                    start_mode = $mode, scheduled_start_utc = $start, render_dpi = $dpi, grayscale = $gray,
+                    invoice_state = $inv, bw_page_price = $bwprice, colour_page_price = $colprice,
+                    page_colour_map = $colmap,
+                    page_selection = $psel, layout = $layout, duplex = $duplex, paper = $paper,
+                    margin_mm = $margin, fold_gap_mm = $foldgap, scaling = $scaling,
+                    booklet_binding = $binding, sheets_per_section = $section,
+                    keep_back_cover = $backcover, brochure_fold = $fold,
+                    state = $state, updated_utc = $updated
+                WHERE id = $id;
+                """,
+                transaction,
+                ("$printer", job.PrinterName), ("$ppb", (long)job.PagesPerBatch),
+                ("$delay", (long)job.DelayMinutes), ("$mode", (long)job.StartMode),
+                ("$start", Time(job.ScheduledStartUtc)), ("$dpi", (long)job.RenderDpi),
+                ("$gray", (long)job.ColourMode),
+                ("$inv", (long)job.InvoiceState), ("$bwprice", Money(job.BlackWhitePagePrice)),
+                ("$colprice", Money(job.ColourPagePrice)), ("$colmap", job.PageColourMap),
+                ("$psel", (long)job.PrintSettings.PageSelection), ("$layout", (long)job.PrintSettings.Layout),
+                ("$duplex", (long)job.PrintSettings.Duplex), ("$paper", (long)job.PrintSettings.Paper),
+                ("$margin", Millimetres(job.PrintSettings.MarginMm)), ("$foldgap", Millimetres(job.PrintSettings.FoldGapMm)),
+                ("$scaling", (long)job.PrintSettings.Scaling), ("$binding", (long)job.PrintSettings.Binding),
+                ("$section", (long)job.PrintSettings.SheetsPerSignature),
+                ("$backcover", job.PrintSettings.KeepLastPageAsBackCover ? 1L : 0L),
+                ("$fold", (long)job.PrintSettings.Fold),
+                ("$state", (long)job.State), ("$updated", Time(job.UpdatedUtc)),
+                ("$id", job.Id));
+
+            Execute("DELETE FROM batches WHERE job_id = $id;", transaction, ("$id", job.Id));
+            InsertBatches(job, transaction);
+            transaction.Commit();
+        }
+    }
+
+    /// <summary>The next job number, which is then never handed out again.</summary>
+    public int AllocateJobNumber()
+    {
+        lock (_gate)
+        {
+            using var transaction = _connection.BeginTransaction();
+            var next = QueryScalarLong("SELECT next_job_number FROM schema_info LIMIT 1;", transaction) ?? 1;
+            var used = QueryScalarLong("SELECT COALESCE(MAX(job_number), 0) FROM jobs;", transaction) ?? 0;
+            var number = Math.Max(next, used + 1);
+            Execute("UPDATE schema_info SET next_job_number = $n;", transaction, ("$n", number + 1));
+            transaction.Commit();
+            return (int)number;
+        }
+    }
+
+    /// <summary>Stores the queue order - every job's position - in one transaction.</summary>
+    public void SaveQueueOrder(IEnumerable<PrintJob> jobs)
+    {
+        lock (_gate)
+        {
+            using var transaction = _connection.BeginTransaction();
+            foreach (var job in jobs)
+            {
+                Execute("UPDATE jobs SET queue_position = $pos WHERE id = $id;", transaction,
+                    ("$pos", (long)job.QueuePosition), ("$id", job.Id));
+            }
             transaction.Commit();
         }
     }
@@ -385,7 +507,7 @@ public sealed class JobStore : IDisposable
         lock (_gate)
         {
             var jobs = new List<PrintJob>();
-            using (var command = Command("SELECT * FROM jobs ORDER BY queue_position, created_utc;", null))
+            using (var command = Command("SELECT * FROM jobs ORDER BY queue_position, created_utc, id;", null))
             using (var reader = command.ExecuteReader())
             {
                 while (reader.Read()) jobs.Add(ReadJob(reader));
@@ -603,6 +725,8 @@ public sealed class JobStore : IDisposable
     private static PrintJob ReadJob(IDataRecord r) => new()
     {
         Id = GetString(r, "id")!,
+        Number = (int)(GetLong(r, "job_number") ?? 0),
+        QueuePosition = (int)(GetLong(r, "queue_position") ?? 0),
         SourcePath = GetString(r, "source_path")!,
         FileName = GetString(r, "file_name")!,
         FileSizeBytes = GetLong(r, "file_size") ?? 0,

@@ -133,16 +133,35 @@ SHA-256 and stops, because page 51 of a different document is not page 51.
 
 ---
 
-## 8. One job at a time
+## 8. The queue prints one job at a time, on every printer
 
-The data model, database schema and engine all support a job queue, and
-`GetJobsAsync` already returns a list. The engine runs jobs one at a time in
-order and will not start a second job while one is in flight — correct, since
-they would share a printer.
+Jobs in the print queue run strictly one after another, even when they are for
+different printers. Two jobs on two printers could in principle print at once;
+they do not, because the engine monitors one batch at a time, and a queue that
+runs in exactly the order shown is easier to trust overnight. A job on a
+different printer does skip the rest the previous job's printer needed.
 
-What is missing is only the interface for it: the window shows a single job. A
-second job can be created but the current build gives no way to manage a queue
-of them. Adding that is a view-model change, not an architectural one.
+Other queue limits:
+
+- **No copies setting.** A job prints its document once. To print two copies, add
+  the PDF twice: that makes two independent jobs (PrintPacer notes the duplicate).
+- **Settings are fixed once a job starts.** Its printed batches were planned from
+  them. Cancel it and add the PDF again to print differently.
+- **"Open with PrintPacer" while it is already running** does not reach the
+  running copy: the second copy says PrintPacer is already running and exits,
+  and the files are not added. Drop them on the window instead. (Unchanged from
+  earlier versions.)
+- **One activity list per job.** The job screen shows the selected job's
+  activity, and **Export log…** exports the selected job. The log files in
+  `logs\` interleave every job, each line tagged `[Job #n file.pdf]`.
+- **Problems found only when the job's turn comes.** Before starting, PrintPacer
+  checks what it can for every job - its file, its printer, and the driver's
+  answer about double-sided, paper and orientation - but a file moved or a
+  printer removed later is found when the job starts. The job then stops for a
+  decision, and (by default) the queue carries on without it.
+- **Start times are "not before".** A job with a start time waits for the jobs
+  ahead of it as well as for its time, and holds the jobs behind it until it
+  starts. There is no "start this one at 22:00 whatever else is printing".
 
 ---
 
@@ -181,7 +200,7 @@ Honest list:
 
 Considered and deliberately left out of this version:
 
-- Multi-job queue management in the interface (see §8)
+- Copies per job (see §8)
 - Printing an arbitrary page range (odd and even pages are supported)
 - Finishing options (stapling, punching), paper tray selection
 - Turning the paper over by hand under PrintPacer's control ("manual duplex") -

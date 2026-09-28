@@ -303,6 +303,8 @@ public class InvoiceTests
                 ALTER TABLE jobs DROP COLUMN sheets_per_section;
                 ALTER TABLE jobs DROP COLUMN keep_back_cover;
                 ALTER TABLE jobs DROP COLUMN brochure_fold;
+                ALTER TABLE jobs DROP COLUMN job_number;
+                ALTER TABLE schema_info DROP COLUMN next_job_number;
                 UPDATE schema_info SET version = 1;
                 """;
             command.ExecuteNonQuery();

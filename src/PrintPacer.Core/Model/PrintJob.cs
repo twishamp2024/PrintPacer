@@ -11,6 +11,15 @@ public sealed class PrintJob
 {
     public required string Id { get; init; }
 
+    /// <summary>
+    /// "Job #12": a short number for people and logs, given when the job is created and never
+    /// reused or changed. Not the queue position, which changes when jobs are reordered.
+    /// </summary>
+    public int Number { get; init; }
+
+    /// <summary>Place in the print queue; lower goes first. Stored, so the chosen order survives a restart.</summary>
+    public int QueuePosition { get; set; }
+
     // ---- Document identity -------------------------------------------------
     public required string SourcePath { get; set; }
     public required string FileName { get; init; }
@@ -150,6 +159,94 @@ public sealed class PrintJob
 
     public bool IsActive => !IsTerminal && State != JobState.Draft;
 
+    /// <summary>Whether anything of this job has ever been handed to the printer.</summary>
+    public bool HasSentAnything => Batches.Any(b => b.Attempts.Count > 0);
+
+    /// <summary>
+    /// Not yet started and nothing sent: the job may still be edited, reordered or removed
+    /// without any record of printing being touched.
+    /// </summary>
+    public bool IsWaiting => State is JobState.Draft or JobState.Queued && !HasSentAnything;
+
+    public string Label => Number > 0 ? $"Job #{Number}" : "Job";
+
+    /// <summary>The job's settings as one value, for display, editing and copying.</summary>
+    public JobConfiguration Configuration => new()
+    {
+        PrinterName = PrinterName,
+        PagesPerBatch = PagesPerBatch,
+        DelayMinutes = DelayMinutes,
+        StartMode = StartMode,
+        ScheduledStartUtc = ScheduledStartUtc,
+        RenderDpi = RenderDpi,
+        ColourMode = ColourMode,
+        PrintSettings = PrintSettings,
+        Invoice = WantsInvoice ? new InvoiceRequest(BlackWhitePagePrice, ColourPagePrice, PageColourMap) : null,
+    };
+
+    /// <summary>
+    /// A job for a document, configured and batched but not started. The configuration is copied
+    /// in field by field; the caller's value is never kept, so nothing else can change this job.
+    /// </summary>
+    public static PrintJob Create(string id, int number, int queuePosition, DocumentIdentity document,
+        JobConfiguration configuration, DateTimeOffset now)
+    {
+        var print = configuration.PrintSettings;
+        var plan = PrintPlan.Build(print, document.TotalPages);
+        var invoice = configuration.Invoice;
+
+        var job = new PrintJob
+        {
+            Id = id,
+            Number = number,
+            QueuePosition = queuePosition,
+            SourcePath = document.SourcePath,
+            FileName = document.FileName,
+            FileSizeBytes = document.FileSizeBytes,
+            FileSha256 = document.FileSha256,
+            TotalPages = document.TotalPages,
+            Title = document.Title,
+            Author = document.Author,
+            Producer = document.Producer,
+            PdfVersion = document.PdfVersion,
+            IsEncrypted = document.IsEncrypted,
+            PrinterName = configuration.PrinterName,
+            PagesPerBatch = Math.Clamp(configuration.PagesPerBatch, 1, Math.Max(1, plan.UnitCount)),
+            DelayMinutes = Math.Clamp(configuration.DelayMinutes, 0, JobConfiguration.MaxDelayMinutes),
+            StartMode = configuration.StartMode,
+            ScheduledStartUtc = configuration.StartMode == StartMode.AtTime ? configuration.ScheduledStartUtc : null,
+            RenderDpi = configuration.RenderDpi,
+            ColourMode = configuration.ColourMode,
+            PrintSettings = print,
+            InvoiceState = invoice is null ? InvoiceState.NotRequested : InvoiceState.Waiting,
+            BlackWhitePagePrice = invoice?.BlackWhitePagePrice ?? 0m,
+            ColourPagePrice = invoice?.ColourPagePrice ?? 0m,
+            PageColourMap = invoice?.PageColourMap,
+            CreatedUtc = now,
+            UpdatedUtc = now,
+            State = JobState.Draft,
+        };
+
+        // Batching comes last: the plan has already selected and arranged the pages, so the
+        // batches divide finished sheets and cannot break a spread or a sheet's two sides.
+        job.Batches.AddRange(PlanBatches(id, job.Plan, job.PagesPerBatch));
+        return job;
+    }
+
+    /// <summary>
+    /// The same job - same identity, document, number, place and state - with a different
+    /// configuration and batches planned afresh from it. Only for a job that has sent nothing.
+    /// </summary>
+    public PrintJob WithConfiguration(JobConfiguration configuration, DateTimeOffset now)
+    {
+        if (!IsWaiting) throw new InvalidOperationException("Only a job that has not started can be changed.");
+
+        var job = Create(Id, Number, QueuePosition, DocumentIdentity.Of(this), configuration, CreatedUtc);
+        job.State = State;
+        job.UpdatedUtc = now;
+        return job;
+    }
+
     /// <summary>
     /// Computes the batch layout for a document. The final batch absorbs the remainder,
     /// so a 200-page document at 50/batch yields 4 batches, and a 201-page document
@@ -188,4 +285,21 @@ public sealed class PrintJob
         }
         return batches;
     }
+}
+
+/// <summary>What a job knows about its document, taken when the PDF was added.</summary>
+public sealed record DocumentIdentity(
+    string SourcePath,
+    string FileName,
+    long FileSizeBytes,
+    string FileSha256,
+    int TotalPages,
+    string? Title = null,
+    string? Author = null,
+    string? Producer = null,
+    string? PdfVersion = null,
+    bool IsEncrypted = false)
+{
+    public static DocumentIdentity Of(PrintJob job) => new(job.SourcePath, job.FileName, job.FileSizeBytes,
+        job.FileSha256, job.TotalPages, job.Title, job.Author, job.Producer, job.PdfVersion, job.IsEncrypted);
 }

@@ -40,7 +40,7 @@ public partial class App : Application
     private MainViewModel? _viewModel;
     private MainWindow? _window;
     private bool _exiting;
-    private string? _pendingDocument;
+    private IReadOnlyList<string> _pendingDocuments = Array.Empty<string>();
 
     /// <summary>Exposed for the view model's read-only access to the event log.</summary>
     internal static JobStore? Store { get; private set; }
@@ -78,10 +78,10 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
             Log.Fatal(args.ExceptionObject as Exception, "Unhandled exception on a background thread");
 
-        _pendingDocument = e.Args.FirstOrDefault(a =>
+        _pendingDocuments = e.Args.Where(a =>
             !a.StartsWith('-') &&
             a.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) &&
-            File.Exists(a));
+            File.Exists(a)).ToList();
 
         try
         {
@@ -129,9 +129,9 @@ public partial class App : Application
         _window = new MainWindow(_viewModel);
         _window.CloseRequested += HideToTray;
 
-        // A PDF passed on the command line is loaded straight into the setup screen, so
-        // "Open with PrintPacer" from File Explorer lands the user one click from starting.
-        if (_pendingDocument is { } document) _viewModel.LoadDocument(document);
+        // PDFs passed on the command line join the queue as jobs, so "Open with PrintPacer" from
+        // File Explorer - for one file or several - lands the user one click from starting.
+        if (_pendingDocuments.Count > 0) _viewModel.AddFiles(_pendingDocuments);
 
         if (!startMinimised)
         {
@@ -156,9 +156,9 @@ public partial class App : Application
             }
         }
 
-        // Keep the tray tooltip in step with the headline state.
+        // Keep the tray tooltip in step with what the queue is doing.
         _engine.JobChanged += job => Dispatcher.BeginInvoke(() =>
-            _tray?.SetStatus($"PrintPacer — {_viewModel?.StateHeadline ?? "Idle"}"));
+            _tray?.SetStatus($"PrintPacer — {_viewModel?.QueueHeadline ?? "Idle"}"));
     }
 
     /// <summary>
@@ -230,14 +230,14 @@ public partial class App : Application
     {
         if (_window is null) return;
 
-        var jobRunning = _viewModel?.CurrentJob is { IsActive: true };
+        var queueRunning = _viewModel?.HasActiveWork == true;
         _window.Hide();
 
-        if (jobRunning)
+        if (queueRunning)
         {
             _tray?.Notify(new Notification(NotificationKind.Information,
                 "PrintPacer is still running",
-                "The job continues in the background. Double-click this icon to reopen the window."));
+                "The print queue continues in the background. Double-click this icon to reopen the window."));
         }
     }
 
@@ -245,14 +245,12 @@ public partial class App : Application
     {
         if (_exiting) return;
 
-        if (_viewModel?.CurrentJob is { IsActive: true } job)
+        if (_viewModel?.HasActiveWork == true)
         {
             var answer = MessageBox.Show(
-                $"A print job is still running.\n\n" +
-                $"{job.FileName}: {job.PendingBatchCount} batch(es) " +
-                $"have not been sent yet.\n\n" +
+                $"The print queue is still running: {_viewModel.QueueHeadline}.\n\n" +
                 "If you exit now, nothing further will be printed until you open PrintPacer again. " +
-                "The job is saved and will offer to continue when you do.\n\n" +
+                "Every job is saved, in order, and will continue when you do.\n\n" +
                 "Exit anyway?",
                 "PrintPacer", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
 

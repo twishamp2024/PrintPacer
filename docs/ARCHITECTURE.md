@@ -213,6 +213,56 @@ part-way count proves whole units only when each unit is one side; for double-si
 work no resume point is offered, because a driver that duplexes by hand prints every
 front before any back.
 
+### 4.6 Many jobs: the print queue
+
+Every PDF added is its own `PrintJob`, with its own `JobConfiguration` - printer,
+batch size, rest, start time, render resolution, colour, `PrintSettings`, invoice.
+The configuration is an immutable record: a job is created with a copy of the
+defaults (`JobConfiguration.FromDefaults`), and editing a job that has not started
+(`JobEngine.UpdateJobAsync`) builds a new `PrintJob` with the same identity, plans
+its batches afresh and stores both in one transaction (`JobStore.ReplaceConfiguration`,
+which refuses any job with a submission attempt on record). No two jobs, and no job
+and the defaults, can share a mutable value. PDFs are never merged.
+
+The queue is the existing job list in `queue_position` order - a column that was in
+the schema from v1 but always 0 until now. There is no second engine and no second
+store: the same loop, batching, verification and recovery run every job.
+
+```
+Draft ──StartQueue──► Queued ──its turn──► (WaitingForStart) ► PrintingBatch ⇄ CoolingDown … ► Completed
+  ▲                    │                                         │
+  └──── HoldJob ───────┘                        NeedsAttention ◄─┘ (kept, never skipped)
+```
+
+**Whose turn it is.** Exactly one job *has the printer*: a started, unfinished job
+(`HoldsPrinter`). `DispatchQueueAsync`, on every idle tick, starts the first `Queued`
+job by position only when no job has the printer. The same rule guards every path
+that can send a batch (`TryStartBatchAsync`, `ContinueAfterBatchAsync`): a job
+resolved by hand while another job prints is *parked* back in `Queued` at its old
+place, rather than interleaving its pages with that job's. `StartJob` is now "queue
+this job", so a lone job starts at once, exactly as before.
+
+**The printer rests between jobs** as it does between batches: the next job on the
+same printer waits for the previous job's rest after its last printed batch, and for
+90 s after an invoice. This is derived from stored batch times, so it survives a
+restart, and held as a `Deadline` capped at the rest's own length, so a clock that
+moved backwards cannot stretch it.
+
+**A job that needs a decision** keeps every unprinted batch. By default
+(`ContinueQueueWhenJobNeedsDecision`) the queue then moves past it - but only when
+none of its pages can still be in the Windows queue: no batch in flight, and no
+submission of a batch in doubt still listed by the spooler (a failed query counts
+as "still there"). Otherwise the next job's pages could mix with it, and the page
+counter could not tell them apart. A paused job always holds the queue.
+
+**Recovery** is unchanged, and simply skips `Draft` and `Queued` jobs: they have
+nothing in flight. Completed jobs are terminal and never revisited.
+
+**Invoices** stay per job. One that would print in the middle of another job's batch
+on the same printer (possible only when a set-aside job is finished by hand) is held
+until that batch has been judged, since its page would otherwise be counted as part
+of the batch.
+
 ---
 
 ## 5. Not printing twice
@@ -421,7 +471,8 @@ Write volume is a handful of rows per batch, so there is nothing to gain from
 concurrency and a great deal to lose from a subtle interleaving bug.
 
 ```
-jobs      configuration (including print settings, schema v3) and current state
+jobs      configuration (including print settings, schema v3), queue position and
+          job number (schema v4), and current state
 batches   unit ranges (pages, or sheets) and their outcomes
 attempts  one row per submission: document token, spooler job id,
           counters before and after, evidence flags, verdict text
@@ -469,7 +520,7 @@ deliberately sparse: a blocked printer notifies at most every 30 minutes.
 
 ## 11. Testing strategy
 
-200 automated tests, ~40 seconds. No printer hardware required; the print-path tests use the virtual printers built into Windows and are skipped where those are absent.
+233 automated tests, ~50 seconds. No printer hardware required; the print-path tests use the virtual printers built into Windows and are skipped where those are absent.
 
 The engine runs its **real** loop against its **real** SQLite store; only the
 world outside the application is simulated. A pass means the shipped code paths

@@ -20,14 +20,16 @@ using Serilog;
 namespace PrintPacer.App.ViewModels;
 
 /// <summary>
-/// The whole user interface, in one view model.
+/// The whole user interface, in one view model: the print queue (MainViewModel.Queue.cs), and
+/// the selected job's setup screen or job screen (this file).
 ///
 /// It deliberately owns no job state of its own: everything shown is projected from the
-/// engine's persisted job whenever the engine says it changed. That
+/// engine's persisted jobs whenever the engine says one changed. That
 /// keeps the screen and the database incapable of disagreeing, which matters for an
-/// application whose main job is to be believed about what has and has not printed.
+/// application whose main job is to be believed about what has and has not printed. Even the
+/// settings being edited on the setup screen are saved to their job as they change.
 /// </summary>
-public sealed class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject
 {
     private static readonly ILogger Log = Serilog.Log.ForContext<MainViewModel>();
 
@@ -53,9 +55,17 @@ public sealed class MainViewModel : ObservableObject
         _dispatcher = Dispatcher.CurrentDispatcher;
         Settings = settings;
 
+        _intake = new PdfIntake(pdf);
+
+        // Settings typed on the setup screen reach the job once the typing pauses, not on
+        // every keystroke, and never while a half-typed number cannot be read.
+        _applyTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(400) };
+        _applyTimer.Tick += (_, _) => _ = ApplyPendingEditAsync();
+
         _pagesPerBatch = settings.DefaultPagesPerBatch.ToString();
         _delayMinutes = settings.DefaultDelayMinutes.ToString();
         _colourMode = settings.ColourMode;
+        _renderDpi = settings.RenderDpi;
         _printInvoice = settings.PrintInvoice;
         _blackWhitePrice = FormatPrice(settings.BlackWhitePagePrice);
         _colourPrice = FormatPrice(settings.ColourPagePrice);
@@ -73,12 +83,10 @@ public sealed class MainViewModel : ObservableObject
         _fold = layout.Fold;
 
         BrowseCommand = new RelayCommand(Browse);
-        StartCommand = new RelayCommand(Start, () => CanStart);
-        ClearDocumentCommand = new RelayCommand(() => Document = null);
+        InitialiseQueueCommands();
         PauseCommand = new RelayCommand(() => WithJob(j => _engine.PauseJob(j.Id)));
         ResumeCommand = new RelayCommand(() => WithJob(j => _engine.ResumeJob(j.Id)));
         CancelCommand = new RelayCommand(CancelJob);
-        NewJobCommand = new RelayCommand(NewJob);
         OpenQueueCommand = new RelayCommand(OpenPrintQueue);
         OpenPrinterSettingsCommand = new RelayCommand(OpenPrinterSettings);
         OpenLogFolderCommand = new RelayCommand(() => OpenPath(AppPaths.LogDirectory));
@@ -119,7 +127,7 @@ public sealed class MainViewModel : ObservableObject
         _ticker.Tick += (_, _) => Tick();
         _ticker.Start();
 
-        AdoptExistingJob();
+        LoadJobs();
     }
 
     public AppSettings Settings { get; private set; }
@@ -127,12 +135,9 @@ public sealed class MainViewModel : ObservableObject
     // ---- Commands -----------------------------------------------------------
 
     public RelayCommand BrowseCommand { get; }
-    public RelayCommand StartCommand { get; }
-    public RelayCommand ClearDocumentCommand { get; }
     public RelayCommand PauseCommand { get; }
     public RelayCommand ResumeCommand { get; }
     public RelayCommand CancelCommand { get; }
-    public RelayCommand NewJobCommand { get; }
     public RelayCommand OpenQueueCommand { get; }
     public RelayCommand OpenPrinterSettingsCommand { get; }
     public RelayCommand OpenLogFolderCommand { get; }
@@ -160,12 +165,10 @@ public sealed class MainViewModel : ObservableObject
             Raise(nameof(PrinterHint));
             RefreshColourModeNote();
             RefreshPrintSettings();
-            if (value is not null)
-            {
-                Settings.LastPrinterName = value;
-                _settingsStore.Save(Settings);
-                _lastDeviceProbe = DateTimeOffset.MinValue;
-            }
+
+            // The job's printer, not the default for new jobs: that changes only in Settings,
+            // or with "Use as defaults".
+            if (value is not null) _lastDeviceProbe = DateTimeOffset.MinValue;
         }
     }
 
@@ -282,6 +285,24 @@ public sealed class MainViewModel : ObservableObject
     }
 
     private bool BlackAndWhite => ColourMode == ColourMode.BlackAndWhite;
+
+    public IReadOnlyList<Choice<int>> RenderDpiChoices { get; } = new[]
+    {
+        new Choice<int>(150, "150 dpi (fastest)"),
+        new Choice<int>(200, "200 dpi"),
+        new Choice<int>(300, "300 dpi (standard)"),
+        new Choice<int>(400, "400 dpi"),
+        new Choice<int>(600, "600 dpi (slowest)"),
+    };
+
+    private int _renderDpi;
+
+    /// <summary>The job's render resolution. New jobs start at the default from Settings.</summary>
+    public int RenderDpi
+    {
+        get => _renderDpi;
+        set { if (Set(ref _renderDpi, value)) RefreshCanStart(); }
+    }
 
     /// <summary>What each printer's driver said about black and white, asked once per printer.</summary>
     private readonly Dictionary<string, MonochromeCheck> _monochromeChecks = new();
@@ -434,17 +455,21 @@ public sealed class MainViewModel : ObservableObject
                 _flip = _normalFlip;
             }
 
-            foreach (var name in new[]
-                     {
-                         nameof(IsNormalLayout), nameof(IsBooklet), nameof(IsBrochure), nameof(IsImposed),
-                         nameof(CanChooseSides), nameof(DoubleSided), nameof(Flip), nameof(ShowFlip),
-                         nameof(BatchSizeLabel),
-                     })
-            {
-                Raise(name);
-            }
-
+            RaiseLayoutProperties();
             RefreshPrintSettings();
+        }
+    }
+
+    private void RaiseLayoutProperties()
+    {
+        foreach (var name in new[]
+                 {
+                     nameof(Layout), nameof(IsNormalLayout), nameof(IsBooklet), nameof(IsBrochure), nameof(IsImposed),
+                     nameof(CanChooseSides), nameof(DoubleSided), nameof(Flip), nameof(ShowFlip),
+                     nameof(BatchSizeLabel),
+                 })
+        {
+            Raise(name);
         }
     }
 
@@ -559,8 +584,8 @@ public sealed class MainViewModel : ObservableObject
         : "The PDF's pages are the panels, in this order: 1 front cover · 2, 3 inside, left and right · 4 back cover. " +
           "Every further four pages make another leaflet. A PDF that already has whole sides laid out should be printed Normal, double-sided, short edge.";
 
-    /// <summary>"PAGES PER BATCH" for plain jobs, as always; "SHEETS PER BATCH" once a sheet carries more than one page.</summary>
-    public string BatchSizeLabel => !IsImposed && !DoubleSided ? "PAGES PER BATCH" : "SHEETS PER BATCH";
+    /// <summary>"Pages per batch" for plain jobs, as always; "Sheets per batch" once a sheet carries more than one page.</summary>
+    public string BatchSizeLabel => !IsImposed && !DoubleSided ? "Pages per batch" : "Sheets per batch";
 
     public string BatchSizeHint => IsImposed || DoubleSided
         ? IsBooklet ? "1 sheet = 4 pages"
@@ -649,6 +674,13 @@ public sealed class MainViewModel : ObservableObject
         if (setup == PrinterSetup.Default) return null;
 
         var margin = settings.IsImposed ? settings.MarginMm : (double?)null;
+        return SetupReportFor(printer, setup, margin, out pending);
+    }
+
+    /// <summary>The driver's verdict on one printer and setup, asked once and then remembered.</summary>
+    private PrinterSetupReport? SetupReportFor(string printer, PrinterSetup setup, double? margin, out bool pending)
+    {
+        pending = false;
         var key = SetupKey(printer, setup, margin);
         if (_setupChecks.TryGetValue(key, out var report)) return report;
 
@@ -665,6 +697,7 @@ public sealed class MainViewModel : ObservableObject
                     _setupChecksRunning.Remove(key);
                     _setupChecks[key] = result;
                     RefreshPrintSettings();
+                    SyncQueue();
                 });
             });
         }
@@ -831,60 +864,97 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>One batch in the schedule preview: "Batch 2", "Pages 51–100", "+1 h 00 min".</summary>
+    public sealed record ScheduleRow(string Batch, string Range, string When);
+
+    /// <summary>
+    /// What pressing Start will do, in three short lines that can be taken in at a glance, with
+    /// the batch-by-batch schedule kept for when it is asked for. <see cref="IsProblem"/> means
+    /// the headline is the reason nothing can be planned yet.
+    /// </summary>
+    public sealed record PlanPreview(
+        string Headline,
+        string? Timing = null,
+        string? Start = null,
+        string? Layout = null,
+        IReadOnlyList<ScheduleRow>? Schedule = null,
+        string? ScheduleNote = null,
+        bool IsProblem = false)
+    {
+        public bool HasSchedule => Schedule is { Count: > 0 };
+    }
+
     /// <summary>
     /// A plain-language preview of the exact schedule, shown before anything is committed.
     /// The user should never have to guess what pressing the button will do.
     /// </summary>
-    public string BatchPreview
+    public PlanPreview BatchPreview
     {
         get
         {
-            if (Document is null) return "Add a PDF to see how it will be split.";
-            if (BuildPlan(out var planProblem) is not { } plan) return planProblem!;
-            if (!TryReadPagesPerBatch(out var perBatch, out var problem)) return problem!;
-            if (!TryReadDelay(out var delay, out var delayProblem)) return delayProblem!;
+            if (Document is null) return new PlanPreview("Add a PDF to see how it will be split.");
+            if (BuildPlan(out var planProblem) is not { } plan) return new PlanPreview(planProblem!, IsProblem: true);
+            if (!TryReadPagesPerBatch(out var perBatch, out var problem)) return new PlanPreview(problem!, IsProblem: true);
+            if (!TryReadDelay(out var delay, out var delayProblem)) return new PlanPreview(delayProblem!, IsProblem: true);
 
             var batches = PrintJob.PlanBatches("preview", plan, perBatch);
             var start = ResolveStart(out var startProblem);
-            if (startProblem is not null) return startProblem;
+            if (startProblem is not null) return new PlanPreview(startProblem, IsProblem: true);
 
             var settings = plan.Settings;
             var mode = ColourMode.Describe().ToLowerInvariant();
-            var lines = new List<string>
-            {
-                $"Pages       {plan.DescribeSize()}",
-                $"Layout      {DescribeLayout(plan)}",
-                $"Sides       {settings.Duplex.Describe()}",
-            };
 
-            if (settings.IsImposed)
-                lines.Add($"Spacing     {settings.DescribeSpacing()}{DescribeScale(plan)}");
+            var headline = batches.Count == 1
+                ? $"{plan.DescribeSize()}  ·  one batch"
+                : $"{plan.DescribeSize()}  ·  {batches.Count} batches  ·  up to {perBatch} {plan.UnitName(perBatch)} per batch";
 
-            lines.Add("");
-            lines.Add(batches.Count == 1
-                ? $"One print job of {batches[0].PageCount} {plan.UnitName(batches[0].PageCount)}, in {mode}."
-                : $"{batches.Count} separate print jobs of up to {perBatch} {plan.UnitName(perBatch)}, " +
-                  $"{delay} minute(s) apart, every one in {mode}.");
+            var timing = batches.Count == 1
+                ? $"Sent as one print job, in {mode}"
+                : delay == 0
+                    ? $"No rest between batches  ·  every batch in {mode}"
+                    : $"{delay} minute{(delay == 1 ? "" : "s")} between batches  ·  every batch in {mode}";
 
-            var clock = start ?? DateTimeOffset.Now;
-            var width = Math.Max(18, batches.Take(4).Append(batches[^1]).Max(b => b.RangeLabel.Length));
-            foreach (var batch in batches.Take(4))
-            {
-                lines.Add($"    Batch {batch.Number}:  {batch.RangeLabel.PadRight(width)}  {clock.LocalDateTime:ddd HH:mm}");
-                clock = clock.AddMinutes(delay);
-            }
+            // A plain job's settings are all on the screen already; a booklet or brochure also has
+            // things worked out from them - the paper the driver will use, how far pages shrink.
+            var layout = settings.IsImposed
+                ? $"{DescribeLayout(plan)}  ·  {settings.DescribeSpacing()}{DescribeScale(plan)}"
+                : null;
 
-            if (batches.Count > 4)
-            {
-                var last = batches[^1];
-                var finish = (start ?? DateTimeOffset.Now).AddMinutes((double)delay * (batches.Count - 1));
-                lines.Add($"    …");
-                lines.Add($"    Batch {last.Number}:  {last.RangeLabel.PadRight(width)}  {finish.LocalDateTime:ddd HH:mm}");
-            }
+            // In a queue the job starts when its turn comes, which nobody can know in advance, so
+            // the batches are timed from the job's own start rather than given clock times.
+            var schedule = batches.Count == 1
+                ? null
+                : batches.Select(b => new ScheduleRow($"Batch {b.Number}", b.RangeLabel, Offset(delay * (b.Number - 1))))
+                    .ToList();
 
-            return string.Join(Environment.NewLine, lines);
+            return new PlanPreview(
+                headline,
+                timing,
+                "Starts " + DescribeStart(start),
+                layout,
+                schedule,
+                batches.Count > 1 && delay > 0
+                    ? "Times count rests only; each batch also takes as long as the printer needs to print it."
+                    : null);
         }
     }
+
+    /// <summary>When the job being set up will start, as far as can honestly be said.</summary>
+    private string DescribeStart(DateTimeOffset? notBefore)
+    {
+        var ahead = _snapshots.Values.Count(j => j.Id != _job?.Id && j.IsActive &&
+                                                (_job is null || j.State != JobState.Queued || j.QueuePosition < _job.QueuePosition));
+        var queued = ahead == 0 ? "" : $"after the {ahead} job(s) ahead of it in the queue";
+
+        if (notBefore is { } at)
+            return $"not before {at.LocalDateTime:ddd dd MMM HH:mm}" + (ahead == 0 ? "" : ", and " + queued);
+        if (ahead > 0) return queued;
+        return _job?.State == JobState.Queued ? "now" : "as soon as you press Start printing";
+    }
+
+    private static string Offset(int minutes) => minutes == 0
+        ? "at the start"
+        : minutes < 60 ? $"+{minutes} min" : $"+{minutes / 60} h {minutes % 60:00} min";
 
     private string DescribeLayout(PrintPlan plan)
     {
@@ -1027,6 +1097,13 @@ public sealed class MainViewModel : ObservableObject
 
         if (!PrintInvoice || Document is null || BlackAndWhite) return;
 
+        // Already known - from when the file was added, or from its job - so not worked out again.
+        if (_knownColourMaps.TryGetValue(Document.Sha256, out var known) && PageColourMap.IsValid(known, Document.PageCount))
+        {
+            _colourMap = known;
+            return;
+        }
+
         var document = Document;
         var check = new CancellationTokenSource();
         _colourCheck = check;
@@ -1050,6 +1127,7 @@ public sealed class MainViewModel : ObservableObject
             if (_colourCheck != check) return;
 
             _colourMap = PageColourMap.Encode(pages);
+            _knownColourMaps[document.Sha256] = _colourMap;
             Log.Information("Colour check of {File}: {Colour} of {Pages} pages use colour",
                 document.FileName, pages.Count(p => p), pages.Length);
         }
@@ -1102,15 +1180,23 @@ public sealed class MainViewModel : ObservableObject
         return parsed && value >= 0 && value <= 1_000_000m;
     }
 
-    private static string FormatPrice(decimal value) => value.ToString("0.##", CultureInfo.CurrentCulture);
+    // Every decimal a price has, so showing a job's price and saving it again never rounds it.
+    private static string FormatPrice(decimal value) => value.ToString("0.##########", CultureInfo.CurrentCulture);
 
     private static string Money(decimal value) => value.ToString("C", CultureInfo.CurrentCulture);
 
-    private bool _canStart;
-    public bool CanStart
+    private bool _editorValid;
+
+    /// <summary>Whether everything on the setup screen can be read and printed, so it can be saved to the job.</summary>
+    public bool EditorValid
     {
-        get => _canStart;
-        private set { if (Set(ref _canStart, value)) StartCommand.RaiseCanExecuteChanged(); }
+        get => _editorValid;
+        private set
+        {
+            if (!Set(ref _editorValid, value)) return;
+            UseAsDefaultsCommand.RaiseCanExecuteChanged();
+            CopyToOthersCommand.RaiseCanExecuteChanged();
+        }
     }
 
     private string? _setupProblem;
@@ -1122,15 +1208,24 @@ public sealed class MainViewModel : ObservableObject
 
     public bool HasSetupProblem => !string.IsNullOrWhiteSpace(SetupProblem);
 
+    /// <summary>
+    /// The problem, under "What will happen", unless the plan's own headline already says it:
+    /// a batch size that cannot be read is said once, not twice.
+    /// </summary>
+    public bool ShowSetupProblem => HasSetupProblem && SetupProblem != BatchPreview.Headline;
+
     // ---- Dashboard ------------------------------------------------------------
 
-    public bool ShowDashboard => _job is not null;
-    public bool ShowSetup => _job is null;
+    /// <summary>The selected job has started, or finished: show its progress.</summary>
+    public bool ShowDashboard => _job is { IsWaiting: false };
 
-    public string JobDocument => _job?.FileName ?? "";
+    /// <summary>The selected job has not started: show its settings, which can still change.</summary>
+    public bool ShowSetup => _job is { IsWaiting: true };
+
+    public string JobDocument => _job is null ? "" : $"{_job.Label}  ·  {_job.FileName}";
     public string JobSubtitle => _job is null
         ? ""
-        : $"{_job.SizeSummary}  ·  {_job.BatchCount} batches of up to {_job.PagesPerBatch} {_job.UnitName(_job.PagesPerBatch)}  " +
+        : $"{_job.SizeSummary}  ·  {_job.BatchCount} batch{(_job.BatchCount == 1 ? "" : "es")} of up to {_job.PagesPerBatch} {_job.UnitName(_job.PagesPerBatch)}  " +
           $"·  {_job.DelayMinutes} min apart  ·  {_job.ColourMode.Describe()}  ·  {_job.PrinterName}";
 
     /// <summary>The job's page selection, layout and sides, when they are anything but the plain default.</summary>
@@ -1149,7 +1244,9 @@ public sealed class MainViewModel : ObservableObject
 
     public string StateHeadline => _job?.State switch
     {
-        JobState.Draft => "Ready to start",
+        JobState.Draft => "Not started",
+        JobState.Queued when _job.HasSentAnything => "Waiting to continue",
+        JobState.Queued => "Waiting in the queue",
         JobState.WaitingForStart => "Waiting for the start time",
         JobState.PreparingBatch => "Preparing the next batch",
         JobState.PrintingBatch => "Printing",
@@ -1158,7 +1255,7 @@ public sealed class MainViewModel : ObservableObject
         JobState.BlockedPrinterOffline => "Printer unavailable",
         JobState.BlockedPrinterError => "Printer needs attention",
         JobState.Paused => "Paused",
-        JobState.NeedsAttention => "Needs your decision",
+        JobState.NeedsAttention => QueueItemViewModel.Describe(_job),
         JobState.Completed => "Finished",
         JobState.Failed => "Failed",
         JobState.Cancelled => "Cancelled",
@@ -1230,10 +1327,12 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<BatchViewModel> Batches { get; } = new();
     public ObservableCollection<string> RecentEvents { get; } = new();
 
-    public bool CanPause => _job is { IsTerminal: false } && _job.State != JobState.Paused;
+    // A job waiting its turn is held back from the queue instead; pausing only applies once it has the printer.
+    public bool CanPause => _job is { IsTerminal: false } &&
+                            _job.State is not (JobState.Paused or JobState.Draft or JobState.Queued);
     public bool CanResume => _job is { State: JobState.Paused or JobState.NeedsAttention
         or JobState.BlockedPrinterOffline or JobState.BlockedPrinterError or JobState.Failed };
-    public bool CanCancel => _job is { IsTerminal: false };
+    public bool CanCancel => _job is { IsTerminal: false, IsWaiting: false };
     public bool IsFinished => _job is { IsTerminal: true };
     public bool IsPrintingNow => _job?.State == JobState.PrintingBatch;
 
@@ -1340,86 +1439,21 @@ public sealed class MainViewModel : ObservableObject
 
     // ---- Actions -------------------------------------------------------------------
 
-    public void LoadDocument(string path)
-    {
-        try
-        {
-            Document = _pdf.Load(path);
-            SetupProblem = null;
-            Log.Information("Loaded {File}: {Pages} pages", Document.FileName, Document.PageCount);
-        }
-        catch (PdfLoadException ex)
-        {
-            Document = null;
-            SetupProblem = ex.Message;
-            Log.Warning("Rejected {Path}: {Message}", path, ex.Message);
-        }
-        catch (Exception ex)
-        {
-            Document = null;
-            SetupProblem = $"That file could not be opened.\n\n{ex.Message}";
-            Log.Error(ex, "Unexpected failure loading {Path}", path);
-        }
-    }
+    /// <summary>Adds one PDF to the queue, as "Open with PrintPacer" does.</summary>
+    public void LoadDocument(string path) => AddFiles(new[] { path });
 
+    /// <summary>Chooses one or several PDFs; each becomes its own job.</summary>
     private void Browse()
     {
         var dialog = new OpenFileDialog
         {
-            Title = "Choose a PDF to print",
+            Title = "Choose PDFs to print",
             Filter = "PDF documents (*.pdf)|*.pdf|All files (*.*)|*.*",
             CheckFileExists = true,
+            Multiselect = true,
         };
 
-        if (dialog.ShowDialog() == true) LoadDocument(dialog.FileName);
-    }
-
-    private async void Start()
-    {
-        if (Document is null || SelectedPrinter is null) return;
-        if (BuildPlan(out _) is not { } plan) return;
-        if (!TryReadPagesPerBatch(out var perBatch, out _)) return;
-        if (!TryReadDelay(out var delay, out _)) return;
-
-        var start = ResolveStart(out var problem);
-        if (problem is not null) { SetupProblem = problem; return; }
-
-        InvoiceRequest? invoice = null;
-        if (PrintInvoice)
-        {
-            if (!TryReadPrices(out var blackWhite, out var colour, out _)) return;
-            if (!BlackAndWhite && _colourMap is null) return;
-            invoice = new InvoiceRequest(blackWhite, colour, _colourMap);
-        }
-
-        try
-        {
-            var job = await _engine.CreateJobAsync(
-                Document, SelectedPrinter, perBatch, delay,
-                StartLater ? StartMode.AtTime : StartMode.Immediately,
-                start?.ToUniversalTime(),
-                Settings.RenderDpi, ColourMode, invoice, plan.Settings);
-
-            Settings.DefaultPagesPerBatch = perBatch;
-            Settings.DefaultDelayMinutes = delay;
-            Settings.LastPrinterName = SelectedPrinter;
-            Settings.ColourMode = ColourMode;
-            if (plan.Settings.IsImposed) Settings.LayoutDefaults = plan.Settings;
-            Settings.PrintInvoice = PrintInvoice;
-            if (invoice is not null)
-            {
-                Settings.BlackWhitePagePrice = invoice.BlackWhitePagePrice;
-                Settings.ColourPagePrice = invoice.ColourPagePrice;
-            }
-            _settingsStore.Save(Settings);
-
-            _engine.StartJob(job.Id);
-        }
-        catch (Exception ex)
-        {
-            SetupProblem = $"The job could not be created.\n\n{ex.Message}";
-            Log.Error(ex, "CreateJob failed");
-        }
+        if (dialog.ShowDialog() == true) AddFiles(dialog.FileNames);
     }
 
     private void CancelJob()
@@ -1435,29 +1469,6 @@ public sealed class MainViewModel : ObservableObject
             "Cancel job", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
 
         if (answer == MessageBoxResult.Yes) _engine.CancelJob(_job.Id);
-    }
-
-    private void NewJob()
-    {
-        if (_job is { IsTerminal: false }) return;
-
-        if (_job is not null)
-        {
-            _engine.DeleteJob(_job.Id);
-            _job = null;
-        }
-
-        Document = null;
-        SetupProblem = null;
-        PreviewStatus = null;
-
-        // A new job starts plain: the last job printing odd pages, or as a booklet, is no
-        // reason for the next document to. Paper, margins and the like stay as they were.
-        PageSelection = PageSelection.AllPages;
-        Layout = PrintLayout.Normal;
-        DoubleSided = false;
-
-        RefreshAll();
     }
 
     /// <summary>
@@ -1540,20 +1551,33 @@ public sealed class MainViewModel : ObservableObject
 
     // ---- Engine plumbing -------------------------------------------------------------
 
-    private async void AdoptExistingJob()
+    private async void LoadJobs()
     {
         try
         {
-            var jobs = await _engine.GetJobsAsync();
-            _job = jobs.LastOrDefault();
+            foreach (var job in await _engine.GetJobsAsync()) Remember(job);
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Could not read existing jobs");
         }
 
+        SyncQueue();
+
+        // After a restart, open on the job that is printing, or that needs a decision.
+        var running = _snapshots.Values.OrderBy(j => j.QueuePosition)
+            .FirstOrDefault(j => j.IsActive && j.State != JobState.Queued);
+        if (running is not null) Select(running.Id);
+
         RefreshAll();
         RefreshEvents();
+    }
+
+    private void Remember(JobSnapshot job)
+    {
+        _snapshots[job.Id] = job;
+        if (job.Configuration.Invoice?.PageColourMap is { } map && PageColourMap.IsValid(map, job.TotalPages))
+            _knownColourMaps[job.FileSha256] = map;
     }
 
     /// <summary>The job currently on screen, for callers outside the view model.</summary>
@@ -1561,12 +1585,24 @@ public sealed class MainViewModel : ObservableObject
 
     private void OnJobChanged(JobSnapshot job)
     {
-        if (_job is null || _job.Id == job.Id) _job = job;
-        else if (job.IsActive) _job = job;
+        // A job removed a moment ago can still have a change in flight; it must not come back.
+        if (_removed.Contains(job.Id)) return;
 
-        Log.Debug("UI adopted job {File} in state {State}; showing dashboard = {Dashboard}",
+        Remember(job);
+        var selected = _job?.Id == job.Id;
+        var wasWaiting = _job?.IsWaiting == true;
+        if (selected) _job = job;
+
+        SyncQueue();
+
+        if (!selected) return;
+
+        Log.Debug("UI refreshed job {File} in state {State}; showing dashboard = {Dashboard}",
             job.FileName, job.State, ShowDashboard);
 
+        // The setup screen keeps what is being typed; the engine's copy is only shown when the
+        // job is first selected. A job that has just started switches to its progress.
+        if (wasWaiting && !job.IsWaiting) CancelPendingEdit();
         RefreshAll();
     }
 
@@ -1584,6 +1620,9 @@ public sealed class MainViewModel : ObservableObject
                      nameof(CanCancel), nameof(IsFinished), nameof(IsPrintingNow), nameof(PauseExplanation),
                      nameof(ShowInvoice), nameof(InvoiceStatus), nameof(InvoiceCharges),
                      nameof(CanPrintInvoice), nameof(PrintInvoiceLabel),
+                     nameof(EditorJobLabel), nameof(EditorStatus), nameof(CanHold), nameof(BatchPreview),
+                     nameof(SaveStatus), nameof(SaveNote),
+                     nameof(QueueHeadline), nameof(StartQueueLabel),
                  })
         {
             Raise(name);
@@ -1744,41 +1783,45 @@ public sealed class MainViewModel : ObservableObject
 
     private void RefreshCanStart()
     {
-        if (_job is not null) { CanStart = false; return; }
+        RefreshEditorValidity();
+        Raise(nameof(ShowSetupProblem));
+        EditorChanged();
+    }
 
-        if (Document is null) { CanStart = false; SetupProblem = null; return; }
-        if (SelectedPrinter is null) { CanStart = false; SetupProblem = "Choose a printer."; return; }
+    private void RefreshEditorValidity()
+    {
+        if (!ShowSetup) { EditorValid = false; SetupProblem = null; return; }
+
+        if (Document is null) { EditorValid = false; SetupProblem = null; return; }
+        if (SelectedPrinter is null) { EditorValid = false; SetupProblem = "Choose a printer."; return; }
 
         // What to print comes first: without a plan there is nothing to batch.
-        if (BuildPlan(out var planProblem) is null) { CanStart = false; SetupProblem = planProblem; return; }
+        if (BuildPlan(out var planProblem) is null) { EditorValid = false; SetupProblem = planProblem; return; }
 
-        // Double-sided, paper and landscape must be confirmed by the driver before a job exists.
-        var setupReport = CurrentSetupReport(out var setupPending);
-        if (setupPending) { CanStart = false; SetupProblem = null; return; }
+        // A printer that refuses double-sided, the paper or landscape is reported here and on the
+        // job's row, and the job is not started; the settings themselves are still saved, so the
+        // user can pick another printer.
+        var setupReport = CurrentSetupReport(out _);
         if (setupReport?.FirstBlocking is { } blocking)
-        {
-            CanStart = false;
             SetupProblem = $"{blocking.Setting}: {blocking.Message}";
-            return;
-        }
 
-        if (!TryReadPagesPerBatch(out _, out var pagesProblem)) { CanStart = false; SetupProblem = pagesProblem; return; }
-        if (!TryReadDelay(out _, out var delayProblem)) { CanStart = false; SetupProblem = delayProblem; return; }
+        if (!TryReadPagesPerBatch(out _, out var pagesProblem)) { EditorValid = false; SetupProblem = pagesProblem; return; }
+        if (!TryReadDelay(out _, out var delayProblem)) { EditorValid = false; SetupProblem = delayProblem; return; }
 
         ResolveStart(out var startProblem);
-        if (startProblem is not null) { CanStart = false; SetupProblem = startProblem; return; }
+        if (startProblem is not null) { EditorValid = false; SetupProblem = startProblem; return; }
 
         if (PrintInvoice)
         {
-            if (!TryReadPrices(out _, out _, out var priceProblem)) { CanStart = false; SetupProblem = priceProblem; return; }
+            if (!TryReadPrices(out _, out _, out var priceProblem)) { EditorValid = false; SetupProblem = priceProblem; return; }
 
             // Still checking pages for colour: the estimate shows progress, so there is no
             // problem to report, but the job cannot be priced until the check is done.
-            if (!BlackAndWhite && _colourMap is null) { CanStart = false; SetupProblem = _colourProblem; return; }
+            if (!BlackAndWhite && _colourMap is null) { EditorValid = false; SetupProblem = _colourProblem; return; }
         }
 
-        SetupProblem = null;
-        CanStart = true;
+        if (setupReport?.FirstBlocking is null) SetupProblem = null;
+        EditorValid = true;
     }
 
     private bool TryReadPagesPerBatch(out int value, out string? problem)
@@ -1786,7 +1829,7 @@ public sealed class MainViewModel : ObservableObject
         problem = null;
         if (!int.TryParse(PagesPerBatch, out value) || value < 1)
         {
-            problem = BatchSizeLabel == "PAGES PER BATCH"
+            problem = !IsImposed && !DoubleSided
                 ? "Pages per batch must be a whole number of at least 1."
                 : "Sheets per batch must be a whole number of at least 1.";
             return false;
@@ -1853,6 +1896,10 @@ public sealed class MainViewModel : ObservableObject
         foreach (var name in _spooler.ListPrinterNames().OrderBy(n => n))
             Printers.Add(name);
 
+        // A job keeps the printer it was given, even one since removed from Windows: the setup
+        // screen shows it (with a warning on the job) rather than quietly switching printers.
+        if (_job is { IsWaiting: true } job && !Printers.Contains(job.PrinterName)) Printers.Add(job.PrinterName);
+
         _hasPreviewPrinter = Printers.Contains(PreviewPrinter);
         PreviewLayoutCommand.RaiseCanExecuteChanged();
 
@@ -1874,9 +1921,14 @@ public sealed class MainViewModel : ObservableObject
         _probes.InvalidateAll();
         _lastDeviceProbe = DateTimeOffset.MinValue;
         RefreshCanStart();
+        SyncQueue();
     }
 
-    public void Stop() => _ticker.Stop();
+    public void Stop()
+    {
+        _ticker.Stop();
+        FlushEdit();
+    }
 
     private static Brush Resource(string key) =>
         System.Windows.Application.Current?.TryFindResource(key) as Brush ?? Brushes.Gray;

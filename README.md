@@ -19,6 +19,11 @@ textbook.pdf, 200 pages, 50 per batch, 60 minutes apart
 
 Set it up before bed, close the lid, and collect the document in the morning.
 
+Or queue a whole day's work: drop many PDFs at once and each becomes its own job,
+with its own printer, colour, sides, batch size and rest. They print one after
+another overnight, in the order you choose, and a problem with one customer's file
+never touches the others.
+
 ---
 
 ## The one thing this application is really about
@@ -60,7 +65,7 @@ PrintPacer just asks you to confirm more often, which is the honest trade.
 **Requirements:** Windows 10 or 11, 64-bit. Nothing else — the build is
 self-contained, so .NET does not need to be installed.
 
-Double-click **`PrintPacer-Setup-1.3.0.exe`** (51 MB). It installs to
+Double-click **`PrintPacer-Setup-1.4.0.exe`** (51 MB). It installs to
 `C:\Program Files\PrintPacer`, adds a Start Menu shortcut, offers a Desktop
 shortcut, and registers a proper uninstaller in **Settings → Apps**.
 
@@ -83,16 +88,20 @@ install that needs no administrator rights at all.
 
 ## Using it
 
-1. Drop a PDF onto the window (or use **Browse**, or right-click a PDF →
-   **Open with → PrintPacer**).
+1. Drop one or more PDFs onto the window (or use **Browse**, or right-click →
+   **Open with → PrintPacer**). Each becomes its own job in the print queue;
+   click a job to see or change its settings.
 2. Choose what to print — all, odd or even pages; a normal layout, a booklet or
    a brochure; single- or double-sided — then check the printer, print mode
    (colour or black & white), pages (or sheets) per batch, and rest period.
-3. Read the **What will happen** panel — it spells out every batch and its time
+3. Read **What will happen** at the bottom of the job's settings — the plan in
+   three lines, with every batch and its timing under **View schedule** —
    before anything is committed.
-4. Press **START PRINTING**.
+4. Order the queue with ▲ ▼ and press **Start printing** under the queue. Jobs print one after
+   another, each with its own settings, with the printer resting between batches
+   and between jobs.
 
-Closing the window does **not** stop the job; it keeps running from the
+Closing the window does **not** stop the queue; it keeps running from the
 notification area. Exiting properly asks first if a job is still going.
 
 The full walkthrough, including what to do when something goes wrong overnight,

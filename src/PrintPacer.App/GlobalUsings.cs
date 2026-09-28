@@ -22,3 +22,5 @@ global using TextBox = System.Windows.Controls.TextBox;
 global using Binding = System.Windows.Data.Binding;
 global using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 global using SaveFileDialog = Microsoft.Win32.SaveFileDialog;
+global using ComboBox = System.Windows.Controls.ComboBox;
+global using ComboBoxItem = System.Windows.Controls.ComboBoxItem;

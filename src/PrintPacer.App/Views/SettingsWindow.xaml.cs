@@ -18,13 +18,25 @@ public partial class SettingsWindow : Window
 
     public AppSettings? Result { get; private set; }
 
-    public SettingsWindow(AppSettings settings)
+    public SettingsWindow(AppSettings settings, IReadOnlyList<string> printers)
     {
         InitializeComponent();
         _settings = settings;
 
+        foreach (var printer in printers) DefaultPrinter.Items.Add(printer);
+        if (settings.LastPrinterName is { } chosen && !printers.Contains(chosen)) DefaultPrinter.Items.Add(chosen);
+        DefaultPrinter.SelectedItem = settings.LastPrinterName ?? printers.FirstOrDefault();
+        SelectByTag(DefaultColour, settings.ColourMode.ToString());
+        SelectByTag(DefaultSides, settings.DefaultDuplex.ToString());
+        DefaultPagesPerBatch.Text = settings.DefaultPagesPerBatch.ToString(CultureInfo.CurrentCulture);
+        DefaultDelay.Text = settings.DefaultDelayMinutes.ToString(CultureInfo.CurrentCulture);
+        DefaultInvoice.IsChecked = settings.PrintInvoice;
+        DefaultBlackWhitePrice.Text = settings.BlackWhitePagePrice.ToString("0.##", CultureInfo.CurrentCulture);
+        DefaultColourPrice.Text = settings.ColourPagePrice.ToString("0.##", CultureInfo.CurrentCulture);
+
         KeepAwake.IsChecked = settings.KeepAwakeWhilePrinting;
         AutoResume.IsChecked = settings.AutoResumeUnambiguousJobs;
+        ContinueQueue.IsChecked = settings.ContinueQueueWhenJobNeedsDecision;
         StartWithWindows.IsChecked = settings.LaunchOnWindowsStartup;
         StartMinimised.IsChecked = settings.StartMinimised;
 
@@ -48,6 +60,12 @@ public partial class SettingsWindow : Window
                             "Nothing is uploaded anywhere, and PDFs are only ever read from where they already are.";
     }
 
+    private static void SelectByTag(ComboBox box, string tag)
+    {
+        box.SelectedItem = box.Items.OfType<ComboBoxItem>().FirstOrDefault(i => i.Tag as string == tag);
+        if (box.SelectedItem is null) box.SelectedIndex = 0;
+    }
+
     private void SelectDpi(int dpi)
     {
         foreach (var item in RenderDpi.Items.OfType<ComboBoxItem>())
@@ -68,6 +86,22 @@ public partial class SettingsWindow : Window
         if (!ReadInt(StallTimeout, "Stall timeout", 2, 1440, out var stall)) return;
         if (!ReadInt(MaxRetries, "Automatic retries", 1, 10, out var retries)) return;
         if (!ReadInt(LogRetention, "Log retention", 1, 365, out var retention)) return;
+        if (!ReadInt(DefaultPagesPerBatch, "Batch size", 1, 10_000, out var pagesPerBatch, CultureInfo.CurrentCulture)) return;
+        if (!ReadInt(DefaultDelay, "Rest between batches", 0, 24 * 60, out var delay, CultureInfo.CurrentCulture)) return;
+        if (!ReadPrice(DefaultBlackWhitePrice, "Black & white page price", out var blackWhitePrice)) return;
+        if (!ReadPrice(DefaultColourPrice, "Colour page price", out var colourPrice)) return;
+
+        _settings.LastPrinterName = DefaultPrinter.SelectedItem as string ?? _settings.LastPrinterName;
+        _settings.ColourMode = DefaultColour.SelectedItem is ComboBoxItem { Tag: string colour } &&
+                               Enum.TryParse<ColourMode>(colour, out var mode) ? mode : ColourMode.Colour;
+        _settings.DefaultDuplex = DefaultSides.SelectedItem is ComboBoxItem { Tag: string sides } &&
+                                  Enum.TryParse<DuplexMode>(sides, out var duplex) ? duplex : DuplexMode.SingleSided;
+        _settings.DefaultPagesPerBatch = pagesPerBatch;
+        _settings.DefaultDelayMinutes = delay;
+        _settings.PrintInvoice = DefaultInvoice.IsChecked == true;
+        _settings.BlackWhitePagePrice = blackWhitePrice;
+        _settings.ColourPagePrice = colourPrice;
+        _settings.ContinueQueueWhenJobNeedsDecision = ContinueQueue.IsChecked == true;
 
         _settings.KeepAwakeWhilePrinting = KeepAwake.IsChecked == true;
         _settings.AutoResumeUnambiguousJobs = AutoResume.IsChecked == true;
@@ -98,9 +132,24 @@ public partial class SettingsWindow : Window
         DialogResult = true;
     }
 
-    private bool ReadInt(TextBox box, string label, int min, int max, out int value)
+    private bool ReadPrice(TextBox box, string label, out decimal value)
     {
-        if (int.TryParse(box.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value)
+        if ((decimal.TryParse(box.Text, NumberStyles.Currency, CultureInfo.CurrentCulture, out value) ||
+             decimal.TryParse(box.Text, NumberStyles.Currency, CultureInfo.InvariantCulture, out value))
+            && value is >= 0 and <= 1_000_000m)
+        {
+            return true;
+        }
+
+        ValidationMessage.Text = $"{label} must be a number of 0 or more, for example 2 or 2.50.";
+        box.Focus();
+        box.SelectAll();
+        return false;
+    }
+
+    private bool ReadInt(TextBox box, string label, int min, int max, out int value, CultureInfo? culture = null)
+    {
+        if (int.TryParse(box.Text, NumberStyles.Integer, culture ?? CultureInfo.InvariantCulture, out value)
             && value >= min && value <= max)
         {
             ValidationMessage.Text = "";

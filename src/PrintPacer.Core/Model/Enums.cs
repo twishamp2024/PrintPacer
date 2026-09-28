@@ -47,6 +47,13 @@ public enum JobState
     Completed = 10,
     Failed = 11,
     Cancelled = 12,
+
+    /// <summary>
+    /// Released to the print queue, waiting for its turn. Nothing has been sent. The engine
+    /// starts queued jobs one at a time, in queue order, once no other job has the printer;
+    /// until then the job can still be edited, reordered, held back or removed.
+    /// </summary>
+    Queued = 13,
 }
 
 public enum BatchState

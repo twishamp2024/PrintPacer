@@ -99,6 +99,7 @@ public sealed class SettingsStore
         if (s.LegacyGrayscale == true) s.ColourMode = ColourMode.BlackAndWhite;
         s.LegacyGrayscale = null;
         if (!Enum.IsDefined(s.ColourMode)) s.ColourMode = ColourMode.Colour;
+        if (!Enum.IsDefined(s.DefaultDuplex)) s.DefaultDuplex = DuplexMode.SingleSided;
 
         s.LayoutDefaults = SanitiseLayout(s.LayoutDefaults);
 

@@ -1,9 +1,9 @@
 <Window x:Class="PrintPacer.App.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="PrintPacer settings" Height="720" Width="640"
+        Title="PrintPacer settings" Height="780" Width="680"
         MinHeight="520" MinWidth="560"
-        Background="{StaticResource WindowBackground}"
+        Background="{StaticResource Surface}"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
         UseLayoutRounding="True">
 
@@ -13,16 +13,85 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <ScrollViewer Grid.Row="0" Padding="22,18" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer Grid.Row="0" Padding="24,18" VerticalScrollBarVisibility="Auto">
             <StackPanel>
 
-                <TextBlock Text="These defaults apply to new jobs. A job that is already running keeps the settings it started with."
-                           Style="{StaticResource Secondary}" FontSize="12.5" Margin="0,0,0,14" />
+                <TextBlock Text="Every PDF you add becomes its own job, starting from the defaults below. After that each job keeps its own settings: changing a job never changes these, and changing these never changes a job already in the list."
+                           Style="{StaticResource Secondary}" FontSize="12.5" Margin="0,0,0,14" TextWrapping="Wrap" />
+
+                <!-- Defaults for new jobs -->
+                <Border Style="{StaticResource Section}" BorderThickness="0" Padding="0,0,0,16">
+                    <StackPanel>
+                        <TextBlock Text="Defaults for new jobs" Style="{StaticResource SectionHeading}" />
+
+                        <Grid Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="170" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Text="Printer" Style="{StaticResource Body}" VerticalAlignment="Center" />
+                            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="DefaultPrinter" Style="{StaticResource Dropdown}"
+                                      Margin="0,0,0,8" AutomationProperties.Name="Default printer" />
+
+                            <TextBlock Grid.Row="1" Text="Print mode" Style="{StaticResource Body}" VerticalAlignment="Center" />
+                            <ComboBox Grid.Row="1" Grid.Column="1" x:Name="DefaultColour" Style="{StaticResource Dropdown}"
+                                      Width="220" HorizontalAlignment="Left" Margin="0,0,0,8" AutomationProperties.Name="Default print mode">
+                                <ComboBoxItem Content="Colour" Tag="Colour" />
+                                <ComboBoxItem Content="Black &amp; white" Tag="BlackAndWhite" />
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="2" Text="Sides" Style="{StaticResource Body}" VerticalAlignment="Center" />
+                            <ComboBox Grid.Row="2" Grid.Column="1" x:Name="DefaultSides" Style="{StaticResource Dropdown}"
+                                      Width="300" HorizontalAlignment="Left" Margin="0,0,0,8" AutomationProperties.Name="Default sides">
+                                <ComboBoxItem Content="Single-sided" Tag="SingleSided" />
+                                <ComboBoxItem Content="Double-sided, flip on long edge" Tag="LongEdge" />
+                                <ComboBoxItem Content="Double-sided, flip on short edge" Tag="ShortEdge" />
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="3" Text="Batch size" Style="{StaticResource Body}" VerticalAlignment="Center" />
+                            <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBox x:Name="DefaultPagesPerBatch" Style="{StaticResource Field}" Width="80" Height="34"
+                                         AutomationProperties.Name="Default pages per batch" />
+                                <TextBlock Text="pages (sheets when double-sided)" Style="{StaticResource Secondary}" FontSize="12"
+                                           VerticalAlignment="Center" Margin="10,0,0,0" />
+                            </StackPanel>
+
+                            <TextBlock Grid.Row="4" Text="Rest between batches" Style="{StaticResource Body}" VerticalAlignment="Center" />
+                            <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal">
+                                <TextBox x:Name="DefaultDelay" Style="{StaticResource Field}" Width="80" Height="34"
+                                         AutomationProperties.Name="Default rest in minutes" />
+                                <TextBlock Text="minutes" Style="{StaticResource Secondary}" FontSize="12"
+                                           VerticalAlignment="Center" Margin="10,0,0,0" />
+                            </StackPanel>
+                        </Grid>
+
+                        <CheckBox x:Name="DefaultInvoice" Style="{StaticResource Check}" Margin="0,12,0,4"
+                                  Content="Print an invoice when each job finishes" />
+                        <StackPanel Orientation="Horizontal" Margin="26,4,0,0">
+                            <TextBlock Text="Black &amp; white page" Style="{StaticResource Secondary}" FontSize="12" VerticalAlignment="Center" />
+                            <TextBox x:Name="DefaultBlackWhitePrice" Style="{StaticResource Field}" Width="80" Height="32" Margin="8,0,0,0"
+                                     AutomationProperties.Name="Default price per black and white page" />
+                            <TextBlock Text="Colour page" Style="{StaticResource Secondary}" FontSize="12" VerticalAlignment="Center" Margin="18,0,0,0" />
+                            <TextBox x:Name="DefaultColourPrice" Style="{StaticResource Field}" Width="80" Height="32" Margin="8,0,0,0"
+                                     AutomationProperties.Name="Default price per colour page" />
+                        </StackPanel>
+                        <TextBlock Text="Page selection and layout always start at all pages, normal. Render resolution is under Printing below. A job's own settings screen also has “Use as defaults”."
+                                   Style="{StaticResource Secondary}" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
 
                 <!-- Overnight behaviour -->
-                <Border Style="{StaticResource Card}">
+                <Border Style="{StaticResource Section}">
                     <StackPanel>
-                        <TextBlock Text="OVERNIGHT" Style="{StaticResource FieldLabel}" />
+                        <TextBlock Text="Overnight" Style="{StaticResource SectionHeading}" />
 
                         <CheckBox x:Name="KeepAwake" Style="{StaticResource Check}"
                                   Content="Keep the computer awake while a job is running" />
@@ -34,6 +103,11 @@
                         <TextBlock Text="Only applies to jobs whose interrupted batches could be resolved with certainty. Anything in doubt always waits for you."
                                    Style="{StaticResource Secondary}" FontSize="12" Margin="26,0,0,10" />
 
+                        <CheckBox x:Name="ContinueQueue" Style="{StaticResource Check}"
+                                  Content="When a job needs my decision, carry on with the next job in the queue" />
+                        <TextBlock Text="The job that needs you keeps its place and every unprinted batch, and nothing of it is sent again until you decide. The queue only moves on when none of that job's pages can still be in the Windows print queue. A paused job always holds the queue."
+                                   Style="{StaticResource Secondary}" FontSize="12" Margin="26,0,0,10" TextWrapping="Wrap" />
+
                         <CheckBox x:Name="StartWithWindows" Style="{StaticResource Check}"
                                   Content="Start PrintPacer when I sign in to Windows" />
                         <CheckBox x:Name="StartMinimised" Style="{StaticResource Check}"
@@ -42,9 +116,9 @@
                 </Border>
 
                 <!-- Notifications -->
-                <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                <Border Style="{StaticResource Section}">
                     <StackPanel>
-                        <TextBlock Text="NOTIFICATIONS" Style="{StaticResource FieldLabel}" />
+                        <TextBlock Text="Notifications" Style="{StaticResource SectionHeading}" />
                         <CheckBox x:Name="NotificationsEnabled" Style="{StaticResource Check}"
                                   Content="Show notifications" />
                         <CheckBox x:Name="NotifyBatch" Style="{StaticResource Check}" Margin="26,4"
@@ -57,9 +131,9 @@
                 </Border>
 
                 <!-- Printing -->
-                <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                <Border Style="{StaticResource Section}">
                     <StackPanel>
-                        <TextBlock Text="PRINTING" Style="{StaticResource FieldLabel}" />
+                        <TextBlock Text="Printing" Style="{StaticResource SectionHeading}" />
 
                         <Grid Margin="0,4,0,0">
                             <Grid.ColumnDefinitions>
@@ -69,7 +143,7 @@
                             <TextBlock Grid.Column="0" Text="Render resolution"
                                        Style="{StaticResource Body}" VerticalAlignment="Center" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <ComboBox x:Name="RenderDpi" Style="{StaticResource Dropdown}" Width="130">
+                                <ComboBox x:Name="RenderDpi" Style="{StaticResource Dropdown}" Width="180">
                                     <ComboBoxItem Content="150 dpi (fastest)" Tag="150" />
                                     <ComboBoxItem Content="200 dpi" Tag="200" />
                                     <ComboBoxItem Content="300 dpi (default)" Tag="300" />
@@ -84,9 +158,9 @@
                 </Border>
 
                 <!-- Reliability -->
-                <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                <Border Style="{StaticResource Section}">
                     <StackPanel>
-                        <TextBlock Text="WHEN SOMETHING GOES WRONG" Style="{StaticResource FieldLabel}" />
+                        <TextBlock Text="When something goes wrong" Style="{StaticResource SectionHeading}" />
 
                         <Grid Margin="0,4,0,8">
                             <Grid.ColumnDefinitions>
@@ -144,9 +218,9 @@
                 </Border>
 
                 <!-- Printer status source -->
-                <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                <Border Style="{StaticResource Section}">
                     <StackPanel>
-                        <TextBlock Text="READING THE PRINTER DIRECTLY" Style="{StaticResource FieldLabel}" />
+                        <TextBlock Text="Reading the printer directly" Style="{StaticResource SectionHeading}" />
 
                         <CheckBox x:Name="DeviceProbeEnabled" Style="{StaticResource Check}"
                                   Content="Ask the printer about its own status over the network" />
@@ -168,9 +242,9 @@
                 </Border>
 
                 <!-- Storage -->
-                <Border Style="{StaticResource Card}" Margin="0,14,0,10">
+                <Border Style="{StaticResource Section}">
                     <StackPanel>
-                        <TextBlock Text="STORAGE" Style="{StaticResource FieldLabel}" />
+                        <TextBlock Text="Storage" Style="{StaticResource SectionHeading}" />
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="220" />
@@ -192,7 +266,7 @@
             </StackPanel>
         </ScrollViewer>
 
-        <Border Grid.Row="1" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}"
+        <Border Grid.Row="1" Background="{StaticResource Sidebar}" BorderBrush="{StaticResource Border}"
                 BorderThickness="0,1,0,0" Padding="22,14">
             <Grid>
                 <TextBlock x:Name="ValidationMessage" Style="{StaticResource Body}"
