@@ -219,8 +219,12 @@ Considered and deliberately left out of this version:
   submitting jobs and cancelling its own jobs are all available to a standard
   user, and its data lives in the user's own profile.
 - **The setup.exe asks for elevation once**, purely because it writes to
-  `C:\Program Files`. A user who cannot elevate is offered a per-user install,
-  and the script-based installer in `installer\` needs no elevation at all.
+  `C:\Program Files` by default (the folder can be changed on the setup's
+  folder page). A user who cannot elevate is offered a per-user install, and
+  the script-based installer in `installer\` needs no elevation at all.
+- **Uninstalling removes only what was installed.** The install folder is the
+  user's choice, so neither installer ever deletes it wholesale: the installed
+  files go, and the folder only if nothing else is left in it.
 - **Nothing leaves the machine** except requests to your own printer on your own
   network, and those are **read-only**: status and counters. The application
   never writes a setting to the printer.

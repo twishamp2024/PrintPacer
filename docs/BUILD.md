@@ -69,10 +69,28 @@ winget install JRSoftware.InnoSetup
 Produces `installer\output\PrintPacer-Setup-1.4.0.exe` — a single 51 MB file
 compressed from the 157 MB payload, which a user downloads and double-clicks.
 
-Installs to `C:\Program Files\PrintPacer` for all users, with a Start Menu
-shortcut, an optional Desktop shortcut, an optional start-with-Windows entry,
-an **Open with → PrintPacer** verb on PDFs (a verb only — the default PDF
-reader is untouched), and an uninstaller in **Settings → Apps**.
+Installs for all users, with a Start Menu shortcut, an optional Desktop
+shortcut, an optional start-with-Windows entry, an **Open with → PrintPacer**
+verb on PDFs (a verb only — the default PDF reader is untouched), and an
+uninstaller in **Settings → Apps**.
+
+**The install folder is the user's choice.** The *Select Destination Location*
+page is always shown, upgrades included, pre-filled with
+`C:\Program Files\PrintPacer` or wherever the previous version went. Choosing a
+different folder on an upgrade moves the install: the old copy is removed once
+the new one is in place, and the shortcuts, startup entry and Open with verb
+follow it. Before anything is copied, setup checks the folder:
+
+| Chosen folder | What setup does |
+|---|---|
+| A drive root, or a folder already holding other files | Offers `<folder>\PrintPacer` instead |
+| The data folder, `%LOCALAPPDATA%\PrintPacer` | Refuses — updating the program must never touch the jobs |
+| Inside the Windows folder | Refuses |
+| Somewhere the installing user cannot write | Refuses, and says why |
+
+The folder has to be PrintPacer's own because the uninstaller removes it. It
+removes only the files setup installed, and the folder only if that leaves it
+empty, so anything else someone keeps there survives.
 
 Installing needs administrator approval because it writes to Program Files.
 Running the application afterwards does not: PrintPacer needs no elevated
@@ -85,6 +103,7 @@ Useful switches:
 ```powershell
 PrintPacer-Setup-1.4.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 PrintPacer-Setup-1.4.0.exe /VERYSILENT /TASKS=desktopicon
+PrintPacer-Setup-1.4.0.exe /VERYSILENT /DIR="D:\Apps\PrintPacer"
 PrintPacer-Setup-1.4.0.exe /LOG=setup.log
 ```
 
@@ -101,10 +120,15 @@ administrator step at all:
 .\publish\Install-PrintPacer.cmd
 ```
 
-Per-user install to `%LOCALAPPDATA%\Programs\PrintPacer`, Start Menu shortcut,
-and an entry in **Settings → Apps → Installed apps**.
+Per-user install, Start Menu shortcut, and an entry in **Settings → Apps →
+Installed apps**. Before copying anything it asks where to install: press
+Enter for `%LOCALAPPDATA%\Programs\PrintPacer` (or the previous install's
+folder), **B** to browse for one, or type a path. The same checks as setup.exe
+apply, and it records the files it installed in `install-manifest.txt`, so an
+upgrade, a move or an uninstall removes those files and nothing else.
 
 ```powershell
+.\Install-PrintPacer.ps1 -InstallDir D:\Apps\PrintPacer   # no question asked
 .\Install-PrintPacer.ps1 -DesktopShortcut
 .\Install-PrintPacer.ps1 -Uninstall
 .\Install-PrintPacer.ps1 -Uninstall -RemoveData   # also deletes jobs, settings, logs

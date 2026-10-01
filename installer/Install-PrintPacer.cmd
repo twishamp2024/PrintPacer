@@ -5,6 +5,7 @@ rem
 rem  Wraps the PowerShell script so nobody has to think about execution policy.
 rem  -ExecutionPolicy Bypass applies to this one process only; it changes no
 rem  machine setting. No administrator rights are needed or requested.
+rem  The script asks where to install before copying anything.
 rem ---------------------------------------------------------------------------
 setlocal
 

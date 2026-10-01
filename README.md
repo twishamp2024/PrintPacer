@@ -65,9 +65,11 @@ PrintPacer just asks you to confirm more often, which is the honest trade.
 **Requirements:** Windows 10 or 11, 64-bit. Nothing else — the build is
 self-contained, so .NET does not need to be installed.
 
-Double-click **`PrintPacer-Setup-1.4.0.exe`** (51 MB). It installs to
-`C:\Program Files\PrintPacer`, adds a Start Menu shortcut, offers a Desktop
-shortcut, and registers a proper uninstaller in **Settings → Apps**.
+Double-click **`PrintPacer-Setup-1.4.0.exe`** (51 MB). Before anything is
+copied it asks where to install — `C:\Program Files\PrintPacer` unless you
+choose another folder or drive — then adds a Start Menu shortcut, offers a
+Desktop shortcut, and registers a proper uninstaller in **Settings → Apps**.
+Running setup again lets you move an existing install; the old copy is removed.
 
 Installing needs administrator approval, as anything writing to Program Files
 does. **Running** PrintPacer afterwards does not: it works entirely as a
