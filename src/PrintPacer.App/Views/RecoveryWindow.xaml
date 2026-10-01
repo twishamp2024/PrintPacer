@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Unfinished job found" Height="520" Width="680"
         MinHeight="380" MinWidth="560"
-        Background="{StaticResource WindowBackground}"
+        Background="{DynamicResource WindowBackground}"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
         SizeToContent="Manual" UseLayoutRounding="True">
 
@@ -14,10 +14,10 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Background="{StaticResource AppBar}" Padding="22,18">
+        <Border Grid.Row="0" Background="{DynamicResource AppBar}" Padding="22,18">
             <StackPanel>
-                <TextBlock x:Name="Headline" Style="{StaticResource Title}" Foreground="{StaticResource AppBarText}" />
-                <TextBlock x:Name="Subhead" Style="{StaticResource Secondary}" Foreground="{StaticResource AppBarTextSoft}"
+                <TextBlock x:Name="Headline" Style="{StaticResource Title}" Foreground="{DynamicResource AppBarText}" />
+                <TextBlock x:Name="Subhead" Style="{StaticResource Secondary}" Foreground="{DynamicResource AppBarTextSoft}"
                            Margin="0,4,0,0" />
             </StackPanel>
         </Border>
@@ -47,7 +47,7 @@
             </ItemsControl>
         </ScrollViewer>
 
-        <Border Grid.Row="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}"
+        <Border Grid.Row="2" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}"
                 BorderThickness="0,1,0,0" Padding="22,14">
             <Grid>
                 <TextBlock x:Name="Advice" Style="{StaticResource Secondary}" FontSize="12"

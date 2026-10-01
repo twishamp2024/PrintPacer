@@ -95,6 +95,10 @@ public sealed class AppSettings
     public bool NotifyOnProblem { get; set; } = true;
     public bool NotifyOnJobComplete { get; set; } = true;
 
+    // ---- Appearance -------------------------------------------------------------
+    /// <summary>Dark colours, switched with the moon/sun button in the main window's header.</summary>
+    public bool DarkMode { get; set; }
+
     // ---- Files ----------------------------------------------------------------
     //
     // There is deliberately no temporary-file setting here. The print engine reads page

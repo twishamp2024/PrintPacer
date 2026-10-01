@@ -71,7 +71,7 @@ $ErrorActionPreference = 'Stop'
 
 $AppName      = 'PrintPacer'
 $Publisher    = 'PrintPacer'
-$Version      = '1.7.0'
+$Version      = '1.8.0'
 $DefaultRoot  = Join-Path $env:LOCALAPPDATA "Programs\$AppName"
 $DefaultData  = Join-Path $env:LOCALAPPDATA $AppName
 $DataKey      = "HKCU:\Software\$AppName"

@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using PrintPacer.App.Platform;
+using PrintPacer.App.Themes;
 using PrintPacer.App.ViewModels;
 using PrintPacer.App.Views;
 using PrintPacer.Core.Device;
@@ -93,6 +94,7 @@ public partial class App : Application
 
         var settingsStore = new SettingsStore();
         var settings = settingsStore.Load();
+        ThemeManager.Apply(settings.DarkMode);
 
         LogSetup.Configure(settings.LogRetentionDays, verbose: e.Args.Contains("--verbose"));
         ReportDataFolderMove(moved);

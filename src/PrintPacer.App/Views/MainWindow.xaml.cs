@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Shapes;
 using PrintPacer.App.ViewModels;
 
 namespace PrintPacer.App.Views;
@@ -8,10 +9,6 @@ namespace PrintPacer.App.Views;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
-    private readonly Brush _dropIdleStroke;
-    private readonly Brush _dropIdleFill;
-    private readonly Brush _queueDropIdleStroke;
-    private readonly Brush _queueDropIdleFill;
 
     /// <summary>Raised when the user closes the window, which hides rather than exits.</summary>
     public event Action? CloseRequested;
@@ -23,11 +20,6 @@ public partial class MainWindow : Window
 
         _viewModel = viewModel;
         DataContext = viewModel;
-
-        _dropIdleStroke = DropTarget.Stroke;
-        _dropIdleFill = DropTarget.Fill;
-        _queueDropIdleStroke = QueueDropTarget.Stroke;
-        _queueDropIdleFill = QueueDropTarget.Fill;
     }
 
     // ---- Drag and drop -----------------------------------------------------
@@ -58,17 +50,23 @@ public partial class MainWindow : Window
         _viewModel.AddFiles(paths);
     }
 
+    /// <summary>
+    /// Set by resource key rather than by brush, so the drop areas keep following the theme
+    /// after being highlighted. The queue's drop area has no fill of its own.
+    /// </summary>
     private void HighlightDropZone(bool active)
     {
         foreach (var (target, idleStroke, idleFill) in new[]
                  {
-                     (DropTarget, _dropIdleStroke, _dropIdleFill),
-                     (QueueDropTarget, _queueDropIdleStroke, _queueDropIdleFill),
+                     (DropTarget, "DropStroke", "DropFill"),
+                     (QueueDropTarget, "BorderStrong", null),
                  })
         {
             if (target is null) continue;
-            target.Stroke = active ? (Brush)FindResource("Accent") : idleStroke;
-            target.Fill = active ? (Brush)FindResource("AccentSoft") : idleFill;
+            target.SetResourceReference(Shape.StrokeProperty, active ? "Accent" : idleStroke);
+            if (active) target.SetResourceReference(Shape.FillProperty, "AccentSoft");
+            else if (idleFill is null) target.Fill = Brushes.Transparent;
+            else target.SetResourceReference(Shape.FillProperty, idleFill);
         }
     }
 

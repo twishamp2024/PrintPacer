@@ -65,7 +65,7 @@ PrintPacer just asks you to confirm more often, which is the honest trade.
 **Requirements:** Windows 10 or 11, 64-bit. Nothing else — the build is
 self-contained, so .NET does not need to be installed.
 
-Double-click **`PrintPacer-Setup-1.7.0.exe`** (51 MB). Before anything is
+Double-click **`PrintPacer-Setup-1.8.0.exe`** (51 MB). Before anything is
 copied it asks two things: where to install the program —
 `C:\Program Files\PrintPacer` unless you choose another folder or drive — and
 where to keep your jobs, settings and logs — `%LOCALAPPDATA%\PrintPacer` unless

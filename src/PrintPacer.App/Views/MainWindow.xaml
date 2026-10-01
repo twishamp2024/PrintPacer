@@ -4,7 +4,7 @@
         xmlns:v="clr-namespace:PrintPacer.App.Views"
         Title="PrintPacer" Height="880" Width="1320"
         MinHeight="640" MinWidth="1100"
-        Background="{StaticResource Page}"
+        Background="{DynamicResource Page}"
         WindowStartupLocation="CenterScreen"
         UseLayoutRounding="True"
         TextOptions.TextRenderingMode="ClearType"
@@ -34,17 +34,17 @@
         </Grid.RowDefinitions>
 
         <!-- ===================== Header ===================== -->
-        <Border Grid.Row="0" Background="{StaticResource AppBar}" Padding="18,10,16,10">
+        <Border Grid.Row="0" Background="{DynamicResource AppBar}" Padding="18,10,16,10">
             <Grid>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
                             ToolTip="Print many PDFs in paced batches, one job after another, so the printer gets a rest in between.">
                     <Border Width="28" Height="28" CornerRadius="8" Background="#33FFFFFF" Margin="0,0,10,0">
                         <TextBlock Text="&#xE749;" FontFamily="{StaticResource IconFont}" FontSize="15"
-                                   Foreground="{StaticResource AppBarText}"
+                                   Foreground="{DynamicResource AppBarText}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <TextBlock Text="PrintPacer" Style="{StaticResource Title}" FontSize="16"
-                               Foreground="{StaticResource AppBarText}" VerticalAlignment="Center" />
+                               Foreground="{DynamicResource AppBarText}" VerticalAlignment="Center" />
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -57,6 +57,13 @@
                     <Button Content="Logs" Style="{StaticResource AppBarLink}"
                             Command="{Binding OpenLogFolderCommand}"
                             ToolTip="Open the folder with PrintPacer's log files" />
+                    <Button Style="{StaticResource AppBarButton}" Padding="9,5" Margin="8,0,0,0"
+                            Command="{Binding ToggleThemeCommand}"
+                            ToolTip="{Binding ThemeToolTip}"
+                            AutomationProperties.Name="{Binding ThemeToolTip}">
+                        <TextBlock Text="{Binding ThemeGlyph}" FontFamily="{StaticResource IconFont}" FontSize="14"
+                                   VerticalAlignment="Center" />
+                    </Button>
                     <Button Content="Settings" Style="{StaticResource AppBarButton}" Padding="12,5"
                             Click="OnSettings" Margin="8,0,0,0"
                             ToolTip="Defaults for new jobs, overnight behaviour, notifications" />
@@ -72,12 +79,12 @@
             </Grid.ColumnDefinitions>
 
             <!-- ============ QUEUE ============ -->
-            <Border Grid.Column="0" Background="{StaticResource Sidebar}"
-                    BorderBrush="{StaticResource Border}" BorderThickness="0,0,1,0">
+            <Border Grid.Column="0" Background="{DynamicResource Sidebar}"
+                    BorderBrush="{DynamicResource Border}" BorderThickness="0,0,1,0">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top" Margin="20,16,14,10">
                         <Grid>
-                            <v:SectionTitle Text="Queue" Glyph="&#xE8FD;" Hue="{StaticResource HueIndigo}"
+                            <v:SectionTitle Text="Queue" Glyph="&#xE8FD;" Hue="{DynamicResource HueIndigo}"
                                             Margin="0" VerticalAlignment="Center" />
                             <Button Content="Add PDFs…" Style="{StaticResource LinkButton}"
                                     HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,-4,0,-4"
@@ -88,7 +95,7 @@
                     </StackPanel>
 
                     <TextBlock DockPanel.Dock="Top" Text="{Binding AddingStatus}" Style="{StaticResource Hint}"
-                               Foreground="{StaticResource Accent}" Margin="20,0,20,10"
+                               Foreground="{DynamicResource Accent}" Margin="20,0,20,10"
                                Visibility="{Binding AddingStatus, Converter={StaticResource ShowText}}" />
 
                     <!-- Files that could not be added, each with its reason. Never dropped silently. -->
@@ -97,7 +104,7 @@
                         <StackPanel>
                             <Grid Margin="0,0,0,4">
                                 <TextBlock Text="Please look at these files" Style="{StaticResource Body}" FontSize="12.5"
-                                           FontWeight="SemiBold" Foreground="{StaticResource Warning}"
+                                           FontWeight="SemiBold" Foreground="{DynamicResource Warning}"
                                            VerticalAlignment="Center" />
                                 <Button Content="Dismiss" Style="{StaticResource LinkButton}" HorizontalAlignment="Right"
                                         VerticalAlignment="Center" Margin="0,-5,-8,-5" Padding="6,3"
@@ -107,10 +114,10 @@
                                 <ItemsControl ItemsSource="{Binding IntakeNotices}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <TextBlock Style="{StaticResource Hint}" Foreground="{StaticResource TextPrimary}" Margin="0,2">
-                                                <Run Text="{Binding Icon, Mode=OneWay}" FontWeight="Bold" Foreground="{StaticResource Warning}" />
+                                            <TextBlock Style="{StaticResource Hint}" Foreground="{DynamicResource TextPrimary}" Margin="0,2">
+                                                <Run Text="{Binding Icon, Mode=OneWay}" FontWeight="Bold" Foreground="{DynamicResource Warning}" />
                                                 <Run Text="{Binding FileName, Mode=OneWay}" FontWeight="SemiBold" />
-                                                <Run Text="—" Foreground="{StaticResource TextSecondary}" />
+                                                <Run Text="—" Foreground="{DynamicResource TextSecondary}" />
                                                 <Run Text="{Binding Message, Mode=OneWay}" />
                                             </TextBlock>
                                         </DataTemplate>
@@ -121,14 +128,14 @@
                     </Border>
 
                     <!-- The queue's one action, and the place to drop more files. -->
-                    <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0"
+                    <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource Border}" BorderThickness="0,1,0,0"
                             Padding="14,10,14,12">
                         <StackPanel>
                             <Grid Height="36" Margin="0,0,0,10"
                                   Visibility="{Binding HasJobs, Converter={StaticResource Show}}"
                                   ToolTip="Drop PDFs anywhere in this window. Each becomes its own job.">
                                 <Rectangle x:Name="QueueDropTarget" RadiusX="6" RadiusY="6"
-                                           Stroke="{StaticResource BorderStrong}" StrokeThickness="1.2"
+                                           Stroke="{DynamicResource BorderStrong}" StrokeThickness="1.2"
                                            StrokeDashArray="4 3" Fill="Transparent" />
                                 <TextBlock Text="Drop more PDFs here" Style="{StaticResource Hint}"
                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -231,7 +238,7 @@
             </Border>
 
         <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                      Background="{StaticResource Page}" Padding="32,20,32,24">
+                      Background="{DynamicResource Page}" Padding="32,20,32,24">
             <Grid>
 
                 <!-- ============ NO JOBS YET ============ -->
@@ -239,15 +246,15 @@
                             Width="560" HorizontalAlignment="Center" Margin="0,80,0,0">
                     <Grid x:Name="DropZone">
                         <Rectangle x:Name="DropTarget" RadiusX="10" RadiusY="10"
-                                   Stroke="#A5B4FC" StrokeThickness="1.5" StrokeDashArray="5 4"
-                                   Fill="#EEF2FF" />
+                                   Stroke="{DynamicResource DropStroke}" StrokeThickness="1.5" StrokeDashArray="5 4"
+                                   Fill="{DynamicResource DropFill}" />
                         <StackPanel HorizontalAlignment="Center" Margin="40,52,40,48">
                             <!-- A page with a folded corner and an arrow into it. -->
                             <Canvas Width="36" Height="44" HorizontalAlignment="Center" Margin="0,0,0,16">
-                                <Path Stroke="{StaticResource HueViolet}" Fill="{StaticResource Surface}"
+                                <Path Stroke="{DynamicResource HueViolet}" Fill="{DynamicResource Surface}"
                                       StrokeThickness="1.6" StrokeLineJoin="Round"
                                       Data="M 1 1 L 24 1 L 35 12 L 35 43 L 1 43 Z M 24 1 L 24 12 L 35 12" />
-                                <Path Stroke="{StaticResource Accent}" StrokeThickness="1.8" StrokeStartLineCap="Round"
+                                <Path Stroke="{DynamicResource Accent}" StrokeThickness="1.8" StrokeStartLineCap="Round"
                                       StrokeEndLineCap="Round" StrokeLineJoin="Round"
                                       Data="M 18 18 L 18 34 M 12 28 L 18 34 L 24 28" />
                             </Canvas>
@@ -285,10 +292,10 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <Border Grid.Column="0" Width="40" Height="48" CornerRadius="8" Background="{StaticResource PdfBadge}"
+                        <Border Grid.Column="0" Width="40" Height="48" CornerRadius="8" Background="{DynamicResource PdfBadge}"
                                 VerticalAlignment="Top" Margin="0,2,14,0">
                             <TextBlock Text="PDF" FontFamily="{StaticResource UiFont}" FontSize="11.5" FontWeight="Bold"
-                                       Foreground="{StaticResource TextOnAccent}"
+                                       Foreground="{DynamicResource TextOnAccent}"
                                        HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,7" />
                         </Border>
 
@@ -298,12 +305,12 @@
                                        TextTrimming="CharacterEllipsis" ToolTip="{Binding DocumentName}" />
                             <TextBlock Style="{StaticResource Secondary}" Margin="0,4,0,0" TextWrapping="Wrap">
                                 <Run Text="{Binding DocumentPages, Mode=OneWay}" FontWeight="SemiBold"
-                                     Foreground="{StaticResource TextPrimary}" />
+                                     Foreground="{DynamicResource TextPrimary}" />
                                 <Run Text="  ·  " />
                                 <Run Text="{Binding DocumentDetail, Mode=OneWay}" FontSize="12.5" />
                             </TextBlock>
                             <TextBlock Text="{Binding DocumentWarning}" Style="{StaticResource Hint}"
-                                       Foreground="{StaticResource Warning}" Margin="0,6,0,0"
+                                       Foreground="{DynamicResource Warning}" Margin="0,6,0,0"
                                        Visibility="{Binding DocumentWarning, Converter={StaticResource ShowText}}" />
                             <TextBlock Text="{Binding EditorStatus}" Style="{StaticResource Hint}" Margin="0,6,0,0"
                                        Visibility="{Binding EditorStatus, Converter={StaticResource ShowText}}" />
@@ -324,7 +331,7 @@
                          before batching, because batches divide whatever these produce. -->
                     <Border Style="{StaticResource Section}">
                         <StackPanel>
-                            <v:SectionTitle Text="Print settings" Glyph="&#xE7C3;" Hue="{StaticResource HueViolet}" />
+                            <v:SectionTitle Text="Print settings" Glyph="&#xE7C3;" Hue="{DynamicResource HueViolet}" />
 
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -506,13 +513,13 @@
 
                             <!-- The first sheets, so the arrangement can be checked before printing -->
                             <Border Margin="0,12,0,0" CornerRadius="6" Padding="12,9"
-                                    Background="{StaticResource SurfaceMuted}"
+                                    Background="{DynamicResource SurfaceMuted}"
                                     Visibility="{Binding SheetMap, Converter={StaticResource ShowText}}">
                                 <StackPanel>
                                     <TextBlock Text="First sheets: page numbers left to right; · is a blank page"
                                                Style="{StaticResource FieldLabel}" />
                                     <TextBlock Text="{Binding SheetMap}" Style="{StaticResource Mono}"
-                                               Foreground="{StaticResource TextPrimary}" LineHeight="20" />
+                                               Foreground="{DynamicResource TextPrimary}" LineHeight="20" />
                                 </StackPanel>
                             </Border>
 
@@ -532,7 +539,7 @@
                     <!-- Batching -->
                     <Border Style="{StaticResource Section}">
                         <StackPanel>
-                            <v:SectionTitle Text="Batching" Glyph="&#xE81E;" Hue="{StaticResource HueAmber}" />
+                            <v:SectionTitle Text="Batching" Glyph="&#xE81E;" Hue="{DynamicResource HueAmber}" />
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -571,7 +578,7 @@
                     <!-- Printer -->
                     <Border Style="{StaticResource Section}">
                         <StackPanel>
-                            <v:SectionTitle Text="Printer" Glyph="&#xE749;" Hue="{StaticResource HueTeal}" />
+                            <v:SectionTitle Text="Printer" Glyph="&#xE749;" Hue="{DynamicResource HueTeal}" />
                             <!-- The printer gets the width a long queue name needs; mode and quality are short. -->
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -621,7 +628,7 @@
                     <!-- Schedule -->
                     <Border Style="{StaticResource Section}">
                         <StackPanel>
-                            <v:SectionTitle Text="Schedule" Glyph="&#xE787;" Hue="{StaticResource HueBlue}" />
+                            <v:SectionTitle Text="Schedule" Glyph="&#xE787;" Hue="{DynamicResource HueBlue}" />
                             <!-- The date and time appear once they mean something, rather than sitting greyed out. -->
                             <StackPanel Orientation="Horizontal" MinHeight="34">
                                 <CheckBox Content="Don't start before" Style="{StaticResource Check}" Margin="0"
@@ -648,7 +655,7 @@
                     <!-- Additional options -->
                     <Border Style="{StaticResource Section}">
                         <StackPanel>
-                            <v:SectionTitle Text="Additional options" Glyph="&#xE8C7;" Hue="{StaticResource HuePink}" />
+                            <v:SectionTitle Text="Additional options" Glyph="&#xE8C7;" Hue="{DynamicResource HuePink}" />
                             <CheckBox Content="Print an invoice when the job finishes" Style="{StaticResource Check}"
                                       Margin="0" IsChecked="{Binding PrintInvoice, Mode=TwoWay}"
                                       ToolTip="Each page is checked for colour automatically, and charged at the matching rate." />
@@ -690,7 +697,7 @@
                                 </Grid>
 
                                 <TextBlock Text="{Binding InvoiceEstimate}" Style="{StaticResource Mono}"
-                                           Foreground="{StaticResource TextPrimary}" LineHeight="20" Margin="0,12,0,0" />
+                                           Foreground="{DynamicResource TextPrimary}" LineHeight="20" Margin="0,12,0,0" />
                             </StackPanel>
                         </StackPanel>
                     </Border>
@@ -698,9 +705,9 @@
                     <!-- What will happen: the plan at a glance, and the batch-by-batch schedule on request -->
                     <Border Style="{StaticResource Section}">
                         <StackPanel>
-                            <v:SectionTitle Text="What will happen" Glyph="&#xE9D5;" Hue="{StaticResource HueGreen}" />
+                            <v:SectionTitle Text="What will happen" Glyph="&#xE9D5;" Hue="{DynamicResource HueGreen}" />
 
-                            <Border Background="{StaticResource PlanSoft}" BorderBrush="{StaticResource PlanBorder}"
+                            <Border Background="{DynamicResource PlanSoft}" BorderBrush="{DynamicResource PlanBorder}"
                                     BorderThickness="3,0,0,0" CornerRadius="6" Padding="12,7,12,8">
                             <StackPanel>
                             <TextBlock Text="{Binding BatchPreview.Headline}" FontWeight="SemiBold">
@@ -708,7 +715,7 @@
                                     <Style TargetType="TextBlock" BasedOn="{StaticResource Body}">
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding BatchPreview.IsProblem}" Value="True">
-                                                <Setter Property="Foreground" Value="{StaticResource Warning}" />
+                                                <Setter Property="Foreground" Value="{DynamicResource Warning}" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -727,7 +734,7 @@
                             <Border Style="{StaticResource Callout}" Margin="0,10,0,0"
                                     Visibility="{Binding ShowSetupProblem, Converter={StaticResource Show}}">
                                 <TextBlock Text="{Binding SetupProblem}" Style="{StaticResource Body}" FontSize="13"
-                                           Foreground="{StaticResource Warning}" />
+                                           Foreground="{DynamicResource Warning}" />
                             </Border>
 
                             <StackPanel Visibility="{Binding BatchPreview.HasSchedule, Converter={StaticResource Show}}">
@@ -766,7 +773,7 @@
                     </Border>
 
                     <!-- Saving, and settings for more than this one job -->
-                    <Border BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" Padding="0,10,0,4">
+                    <Border BorderBrush="{DynamicResource Border}" BorderThickness="0,1,0,0" Padding="0,10,0,4">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -797,10 +804,10 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <Border Grid.Column="0" Width="40" Height="48" CornerRadius="8" Background="{StaticResource PdfBadge}"
+                        <Border Grid.Column="0" Width="40" Height="48" CornerRadius="8" Background="{DynamicResource PdfBadge}"
                                 VerticalAlignment="Top" Margin="0,2,14,0">
                             <TextBlock Text="PDF" FontFamily="{StaticResource UiFont}" FontSize="11.5" FontWeight="Bold"
-                                       Foreground="{StaticResource TextOnAccent}"
+                                       Foreground="{DynamicResource TextOnAccent}"
                                        HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,7" />
                         </Border>
                         <StackPanel Grid.Column="1">
@@ -829,7 +836,7 @@
                             <TextBlock Text="{Binding CountdownCaption}" Style="{StaticResource FieldLabel}"
                                        HorizontalAlignment="Right" Margin="0" />
                             <TextBlock Text="{Binding Countdown}" Style="{StaticResource Display}"
-                                       FontSize="20" Foreground="{StaticResource Waiting}"
+                                       FontSize="20" Foreground="{DynamicResource Waiting}"
                                        HorizontalAlignment="Right" />
                         </StackPanel>
                     </Grid>
@@ -888,14 +895,14 @@
                             Visibility="{Binding ShowInvoice, Converter={StaticResource Show}}">
                         <StackPanel>
                             <Grid>
-                                <v:SectionTitle Text="Invoice" Glyph="&#xE8C7;" Hue="{StaticResource HuePink}" />
+                                <v:SectionTitle Text="Invoice" Glyph="&#xE8C7;" Hue="{DynamicResource HuePink}" />
                                 <Button Content="{Binding PrintInvoiceLabel}" Style="{StaticResource SecondaryButton}"
                                         HorizontalAlignment="Right" VerticalAlignment="Top" Padding="12,5" Margin="0,-4,0,0"
                                         Command="{Binding PrintInvoiceCommand}"
                                         Visibility="{Binding CanPrintInvoice, Converter={StaticResource Show}}" />
                             </Grid>
                             <TextBlock Text="{Binding InvoiceCharges}" Style="{StaticResource Mono}"
-                                       Foreground="{StaticResource TextPrimary}" LineHeight="20" />
+                                       Foreground="{DynamicResource TextPrimary}" LineHeight="20" />
                             <TextBlock Text="{Binding InvoiceStatus}" Style="{StaticResource Hint}" Margin="0,8,0,0" />
                         </StackPanel>
                     </Border>
@@ -903,11 +910,11 @@
                     <!-- Batch history -->
                     <Border Style="{StaticResource Section}">
                         <StackPanel>
-                            <v:SectionTitle Text="Batches" Glyph="&#xE81E;" Hue="{StaticResource HueAmber}" Margin="0,0,0,2" />
+                            <v:SectionTitle Text="Batches" Glyph="&#xE81E;" Hue="{DynamicResource HueAmber}" Margin="0,0,0,2" />
                             <ItemsControl ItemsSource="{Binding Batches}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Padding="0,8" BorderBrush="{StaticResource Border}"
+                                        <Border Padding="0,8" BorderBrush="{DynamicResource Border}"
                                                 BorderThickness="0,0,0,1">
                                             <StackPanel>
                                                 <Grid>
@@ -979,7 +986,7 @@
                     <Border Style="{StaticResource Section}" BorderThickness="0" Padding="0,16,0,10">
                         <StackPanel>
                             <Grid>
-                                <v:SectionTitle Text="Activity" Glyph="&#xE81C;" Hue="{StaticResource HueSlate}" />
+                                <v:SectionTitle Text="Activity" Glyph="&#xE81C;" Hue="{DynamicResource HueSlate}" />
                                 <Button Content="Export log…" Style="{StaticResource LinkButton}"
                                         HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-5,-8,0"
                                         Command="{Binding ExportLogCommand}" />
@@ -990,7 +997,7 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <TextBlock Text="{Binding}" Style="{StaticResource Mono}"
-                                                       Foreground="{StaticResource TextSecondary}"
+                                                       Foreground="{DynamicResource TextSecondary}"
                                                        Margin="0,2" TextWrapping="Wrap" />
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
@@ -1004,7 +1011,7 @@
         </Grid>
 
         <!-- ===================== Status bar ===================== -->
-        <Border Grid.Row="2" Background="{StaticResource Sidebar}" BorderBrush="{StaticResource Border}"
+        <Border Grid.Row="2" Background="{DynamicResource Sidebar}" BorderBrush="{DynamicResource Border}"
                 BorderThickness="0,1,0,0" Padding="20,7">
             <Grid>
                 <StackPanel Orientation="Horizontal">
@@ -1017,7 +1024,7 @@
                 </StackPanel>
 
                 <TextBlock Text="Closing this window keeps the queue running in the notification area."
-                           Style="{StaticResource Hint}" FontSize="11.5" Foreground="{StaticResource TextMuted}"
+                           Style="{StaticResource Hint}" FontSize="11.5" Foreground="{DynamicResource TextMuted}"
                            HorizontalAlignment="Right" VerticalAlignment="Center" />
             </Grid>
         </Border>

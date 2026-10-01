@@ -38,6 +38,15 @@ public sealed class QueueItemViewModel : ObservableObject
         Raise(string.Empty);   // every property may have changed
     }
 
+    /// <summary>The status colours are looked up when read; after a theme change, read them again.</summary>
+    public void RefreshBrushes()
+    {
+        Raise(nameof(StatusForeground));
+        Raise(nameof(StatusBackground));
+        Raise(nameof(BadgeForeground));
+        Raise(nameof(DetailForeground));
+    }
+
     public string Number => Snapshot.Number > 0 ? $"#{Snapshot.Number}" : "";
     public string FileName => Snapshot.FileName;
 

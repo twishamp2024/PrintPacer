@@ -1,0 +1,87 @@
+<!--
+    The colours of the dark theme: the same keys as Colors.Light.xaml (a test checks), for
+    a print room at night. Surfaces are deep indigo rather than black, text is off-white,
+    and every hue is lifted a step so it still reads on the dark page.
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ===== Dark palette ================================================ -->
+    <Color x:Key="AccentColor">#7C9CFF</Color>
+    <Color x:Key="AccentDarkColor">#A9BDFF</Color>
+    <Color x:Key="AccentVioletColor">#8B5CF6</Color>
+
+    <!-- Accent is used for link text and focus rings here, so it is light; hover goes lighter still. -->
+    <SolidColorBrush x:Key="Accent" Color="{StaticResource AccentColor}" />
+    <SolidColorBrush x:Key="AccentDark" Color="{StaticResource AccentDarkColor}" />
+    <SolidColorBrush x:Key="AccentSoft" Color="#26305A" />
+
+    <LinearGradientBrush x:Key="AccentGradient" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Offset="0" Color="#2F5CE6" />
+        <GradientStop Offset="1" Color="#7C3AED" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="ProgressGradient" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Offset="0" Color="#22D3EE" />
+        <GradientStop Offset="0.5" Color="#4F7BFF" />
+        <GradientStop Offset="1" Color="{StaticResource AccentVioletColor}" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="AppBar" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Offset="0" Color="#16204A" />
+        <GradientStop Offset="0.55" Color="#272466" />
+        <GradientStop Offset="1" Color="#43207A" />
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="AppBarText" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="AppBarTextSoft" Color="#C3CCF5" />
+
+    <LinearGradientBrush x:Key="PdfBadge" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Offset="0" Color="#E11D48" />
+        <GradientStop Offset="1" Color="#F97316" />
+    </LinearGradientBrush>
+
+    <SolidColorBrush x:Key="WindowBackground" Color="#0E1122" />
+    <!-- Fields and the selected queue row: a step up from the page. -->
+    <SolidColorBrush x:Key="Surface" Color="#1C2238" />
+    <SolidColorBrush x:Key="SurfaceMuted" Color="#232A44" />
+    <SolidColorBrush x:Key="Page" Color="#131729" />
+    <SolidColorBrush x:Key="Sidebar" Color="#0F1324" />
+    <SolidColorBrush x:Key="SidebarHover" Color="#1A2038" />
+    <SolidColorBrush x:Key="Border" Color="#2A3152" />
+    <SolidColorBrush x:Key="BorderStrong" Color="#3A4368" />
+
+    <SolidColorBrush x:Key="TextPrimary" Color="#E6E9F5" />
+    <SolidColorBrush x:Key="TextSecondary" Color="#A0A9C6" />
+    <SolidColorBrush x:Key="TextMuted" Color="#6E7898" />
+    <SolidColorBrush x:Key="TextOnAccent" Color="#FFFFFF" />
+
+    <SolidColorBrush x:Key="Success" Color="#4ADE80" />
+    <SolidColorBrush x:Key="SuccessSoft" Color="#12301E" />
+    <SolidColorBrush x:Key="Warning" Color="#FBBF24" />
+    <SolidColorBrush x:Key="WarningSoft" Color="#3A2C0C" />
+    <SolidColorBrush x:Key="Danger" Color="#F87171" />
+    <SolidColorBrush x:Key="DangerSoft" Color="#3D1518" />
+    <SolidColorBrush x:Key="Waiting" Color="#38BDF8" />
+    <SolidColorBrush x:Key="WaitingSoft" Color="#0B2C42" />
+
+    <SolidColorBrush x:Key="HueViolet" Color="#A78BFA" />
+    <SolidColorBrush x:Key="HueAmber" Color="#FBBF24" />
+    <SolidColorBrush x:Key="HueTeal" Color="#2DD4BF" />
+    <SolidColorBrush x:Key="HueBlue" Color="#60A5FA" />
+    <SolidColorBrush x:Key="HuePink" Color="#F472B6" />
+    <SolidColorBrush x:Key="HueGreen" Color="#34D399" />
+    <SolidColorBrush x:Key="HueIndigo" Color="#818CF8" />
+    <SolidColorBrush x:Key="HueRed" Color="#F87171" />
+    <SolidColorBrush x:Key="HueSlate" Color="#94A3B8" />
+    <SolidColorBrush x:Key="PlanSoft" Color="#0E2A22" />
+    <SolidColorBrush x:Key="PlanBorder" Color="#1F8A64" />
+
+    <!-- White text on this blue still reads at 5:1, where the light Accent would not. -->
+    <SolidColorBrush x:Key="AccentFill" Color="#3B5BDB" />
+    <SolidColorBrush x:Key="DangerBorder" Color="#7F1D1D" />
+    <SolidColorBrush x:Key="ProgressTrack" Color="#2A3152" />
+    <SolidColorBrush x:Key="DropStroke" Color="#4F5BD5" />
+    <SolidColorBrush x:Key="DropFill" Color="#181E3A" />
+    <SolidColorBrush x:Key="ScrollThumb" Color="#3A4368" />
+    <SolidColorBrush x:Key="ScrollThumbHover" Color="#56608A" />
+
+</ResourceDictionary>

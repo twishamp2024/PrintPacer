@@ -5,7 +5,7 @@
 ;      winget install JRSoftware.InnoSetup
 ;      .\build.ps1 -Installer
 ;
-;  Produces installer\output\PrintPacer-Setup-1.7.0.exe: a single, self-contained
+;  Produces installer\output\PrintPacer-Setup-1.8.0.exe: a single, self-contained
 ;  executable an ordinary user can download and double-click.
 ;
 ;  Installs for all users into Program Files by default, which is what a
@@ -31,7 +31,7 @@
 ; ---------------------------------------------------------------------------
 
 #define AppName        "PrintPacer"
-#define AppVersion     "1.7.0"
+#define AppVersion     "1.8.0"
 #define AppPublisher   "PrintPacer"
 #define AppExe         "PrintPacer.exe"
 #define AppDescription "Scheduled PDF batch printing"

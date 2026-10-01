@@ -66,7 +66,7 @@ winget install JRSoftware.InnoSetup
 .\build.ps1 -Installer
 ```
 
-Produces `installer\output\PrintPacer-Setup-1.7.0.exe` — a single 51 MB file
+Produces `installer\output\PrintPacer-Setup-1.8.0.exe` — a single 51 MB file
 compressed from the 157 MB payload, which a user downloads and double-clicks.
 
 Installs for all users, with a Start Menu shortcut, an optional Desktop
@@ -126,11 +126,11 @@ install instead.
 Useful switches:
 
 ```powershell
-PrintPacer-Setup-1.7.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-PrintPacer-Setup-1.7.0.exe /VERYSILENT /TASKS=desktopicon
-PrintPacer-Setup-1.7.0.exe /VERYSILENT /DIR="D:\Apps\PrintPacer"
-PrintPacer-Setup-1.7.0.exe /VERYSILENT /DATADIR="D:\PrintPacer data"
-PrintPacer-Setup-1.7.0.exe /LOG=setup.log
+PrintPacer-Setup-1.8.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+PrintPacer-Setup-1.8.0.exe /VERYSILENT /TASKS=desktopicon
+PrintPacer-Setup-1.8.0.exe /VERYSILENT /DIR="D:\Apps\PrintPacer"
+PrintPacer-Setup-1.8.0.exe /VERYSILENT /DATADIR="D:\PrintPacer data"
+PrintPacer-Setup-1.8.0.exe /LOG=setup.log
 ```
 
 The setup declares `AppMutex`, so if PrintPacer is running when an upgrade

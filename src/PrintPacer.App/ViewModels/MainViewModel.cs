@@ -128,6 +128,8 @@ public sealed partial class MainViewModel : ObservableObject
         _ticker.Start();
 
         LoadJobs();
+
+        Themes.ThemeManager.Changed += OnThemeChanged;
     }
 
     public AppSettings Settings { get; private set; }
@@ -1420,12 +1422,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     public bool HasDeviceStatus => !string.IsNullOrWhiteSpace(DeviceStatus);
 
-    private Brush _printerStatusBrush = Brushes.Gray;
-    public Brush PrinterStatusBrush
-    {
-        get => _printerStatusBrush;
-        private set => Set(ref _printerStatusBrush, value);
-    }
+    // Kept as a key, so the dot takes the new theme's colour without waiting for the next poll.
+    private string _printerStatusKey = "TextSecondary";
+    public Brush PrinterStatusBrush => Resource(_printerStatusKey);
 
     public string PrinterHint
     {
@@ -1734,13 +1733,13 @@ public sealed partial class MainViewModel : ObservableObject
             ? $"{printer} — {snapshot.StatusText}"
             : $"{printer} — not installed";
 
-        PrinterStatusBrush = Resource(snapshot.Availability switch
+        Set(ref _printerStatusKey, snapshot.Availability switch
         {
             PrinterAvailability.Ready or PrinterAvailability.Busy => "Success",
             PrinterAvailability.Error or PrinterAvailability.NotFound => "Danger",
             PrinterAvailability.Offline or PrinterAvailability.Paused => "Warning",
             _ => "TextSecondary",
-        });
+        }, nameof(PrinterStatusBrush));
 
         // The device is polled far less often than the queue: it is a network round trip,
         // and a printer being nagged every second is a printer that never sleeps.

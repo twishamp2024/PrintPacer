@@ -553,7 +553,11 @@ as above. The rest of the queue then carries on after it.
 
 ## Settings
 
-Most people never need these.
+**Dark mode** is the moon button in the header, beside **Settings**. It switches
+every window at once, and becomes a sun to switch back. PrintPacer remembers
+the choice.
+
+Most people never need the settings below.
 
 **Defaults for new jobs** — printer, print mode, sides, batch size, rest between
 batches, and whether each job prints an invoice (with the page prices). Only the

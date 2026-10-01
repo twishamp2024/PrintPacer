@@ -24,6 +24,13 @@ public sealed class BatchViewModel : ObservableObject
         LiveDetail = liveDetail;
     }
 
+    /// <summary>The status colours are looked up when read; after a theme change, read them again.</summary>
+    public void RefreshBrushes()
+    {
+        Raise(nameof(StatusForeground));
+        Raise(nameof(StatusBackground));
+    }
+
     public int Number => _batch.Number;
     public string Heading => $"Batch {_batch.Number}";
     public string Range => _batch.RangeLabel;
