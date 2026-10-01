@@ -593,13 +593,22 @@ real status and physical page counter. Leave the address blank to find it
 automatically, or type an IP if discovery fails. Turning this off still works,
 but interrupted batches then have to be confirmed by hand more often.
 
-**Storage** — log retention, and a link to your data folder.
+**Storage** — log retention, and where your jobs, settings and logs are kept.
+**Open** shows the folder; **Change…** picks another. The data moves the next
+time PrintPacer starts (it offers to restart straight away when nothing is
+printing): every file is copied and checked before the old copies are removed,
+and if the move cannot be made PrintPacer keeps the old folder and tells you
+why. **Don't move** cancels a move that has not happened yet. A folder that
+already holds other things gets a `PrintPacer` folder of its own inside it; a
+folder that already holds PrintPacer data is used as it is, without copying
+over it.
 
 ---
 
 ## Logs
 
-- **Logs** in the header opens the folder (`%LOCALAPPDATA%\PrintPacer\logs`).
+- **Logs** in the header opens the folder (`logs` in your data folder,
+  `%LOCALAPPDATA%\PrintPacer\logs` unless you chose another).
 - **Export log…** on the job screen writes a full account of the job: every
   batch, every attempt, the spooler job ids, the printer counter before and
   after, and the reasoning behind every verdict.

@@ -45,12 +45,24 @@ public partial class App : Application
     /// <summary>Exposed for the view model's read-only access to the event log.</summary>
     internal static JobStore? Store { get; private set; }
 
+    /// <summary>True when started with --data-dir, whose folder must never become the real one.</summary>
+    internal static bool DataFolderIsSandbox { get; private set; }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        _singleInstance = new Mutex(initiallyOwned: true, AppPaths.SingleInstanceMutex, out var isFirst);
-        if (!isFirst)
+        // The Start Menu's "data folder" shortcut. The folder can be moved, so the shortcut
+        // asks rather than naming it. Opens Explorer and exits; never touches a running copy.
+        if (e.Args.Contains("--open-data-folder", StringComparer.OrdinalIgnoreCase))
+        {
+            OpenFolder(DataFolder.CurrentRoot(new RegistryDataFolderChoice()));
+            Shutdown();
+            return;
+        }
+
+        _singleInstance = new Mutex(initiallyOwned: false, AppPaths.SingleInstanceMutex);
+        if (!AcquireSingleInstance(e.Args.Contains(RestartArgument)))
         {
             MessageBox.Show(
                 "PrintPacer is already running.\n\nLook for its icon in the notification area, " +
@@ -62,15 +74,28 @@ public partial class App : Application
 
         // --data-dir=<folder> keeps the job database, settings and logs somewhere else: for trying
         // a build without touching - or resuming - the jobs of the copy that is in real use.
+        // It also leaves the user's chosen data folder, and any move they asked for, alone.
+        var moved = DataFolderMoveResult.Nothing(DataFolder.DefaultRoot);
         if (e.Args.FirstOrDefault(a => a.StartsWith("--data-dir=", StringComparison.OrdinalIgnoreCase)) is { } dataDir)
+        {
             AppPaths.OverrideRoot(Path.GetFullPath(dataDir["--data-dir=".Length..].Trim('"')));
-
-        AppPaths.EnsureCreated();
+            DataFolderIsSandbox = true;
+        }
+        else if (ChooseDataFolder(out moved) is { } root)
+        {
+            AppPaths.OverrideRoot(root);
+        }
+        else
+        {
+            Shutdown();
+            return;
+        }
 
         var settingsStore = new SettingsStore();
         var settings = settingsStore.Load();
 
         LogSetup.Configure(settings.LogRetentionDays, verbose: e.Args.Contains("--verbose"));
+        ReportDataFolderMove(moved);
 
         BindingErrorListener.Attach();
 
@@ -95,6 +120,115 @@ public partial class App : Application
                 "PrintPacer", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown();
         }
+    }
+
+    /// <summary>Passed to the copy started by <see cref="Restart"/>, which waits for this one to exit.</summary>
+    private const string RestartArgument = "--restarted";
+
+    private bool _ownsSingleInstance;
+
+    private bool AcquireSingleInstance(bool waitForPrevious)
+    {
+        try
+        {
+            _ownsSingleInstance = _singleInstance!.WaitOne(waitForPrevious ? TimeSpan.FromSeconds(30) : TimeSpan.Zero);
+        }
+        catch (AbandonedMutexException)
+        {
+            // The previous copy ended without releasing it, which still hands it to us.
+            _ownsSingleInstance = true;
+        }
+        return _ownsSingleInstance;
+    }
+
+    /// <summary>
+    /// Applies a move the user asked for, then makes sure the data folder can be reached.
+    /// Null means the user chose to close PrintPacer. Runs before the log exists; what happened
+    /// is logged by <see cref="ReportDataFolderMove"/> once it does.
+    /// </summary>
+    private static string? ChooseDataFolder(out DataFolderMoveResult moved)
+    {
+        var choice = new RegistryDataFolderChoice();
+        var root = DataFolder.PrepareAtStartup(choice, out moved, installFolder: AppContext.BaseDirectory);
+
+        // A data folder on a drive that is not plugged in. Starting with an empty database
+        // somewhere else would make every job seem to have vanished, so ask.
+        while (!DataFolder.IsAvailable(root))
+        {
+            var answer = MessageBox.Show(
+                $"PrintPacer keeps its jobs, settings and logs in\n\n    {root}\n\nbut that folder cannot be reached. " +
+                "If it is on a drive that is not connected, connect it now.\n\n" +
+                "Yes - try again\n" +
+                $"No - go back to the standard folder ({DataFolder.DefaultRoot}). Jobs in the other folder are not shown until you switch back in Settings.\n" +
+                "Cancel - close PrintPacer",
+                "PrintPacer", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Yes);
+
+            if (answer == MessageBoxResult.Cancel) return null;
+            if (answer == MessageBoxResult.No)
+            {
+                choice.Current = null;
+                root = DataFolder.DefaultRoot;
+            }
+        }
+
+        return root;
+    }
+
+    private static void ReportDataFolderMove(DataFolderMoveResult moved)
+    {
+        switch (moved.Outcome)
+        {
+            case DataFolderMoveOutcome.None:
+                return;
+            case DataFolderMoveOutcome.Switched:
+                Log.Information("Data folder is now {To} (nothing to move from {From})", moved.To, moved.From);
+                return;
+            case DataFolderMoveOutcome.Moved:
+                Log.Information("Moved the data folder from {From} to {To}. {Detail}", moved.From, moved.To, moved.Detail ?? "");
+                MessageBox.Show(
+                    $"Your jobs, settings and logs are now in\n\n    {moved.To}" +
+                    (moved.Detail is null ? "" : $"\n\n{moved.Detail}"),
+                    "PrintPacer", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            case DataFolderMoveOutcome.UsedExisting:
+                Log.Warning("Data folder is now {To}, which already held data; {From} left in place", moved.To, moved.From);
+                MessageBox.Show(moved.Detail, "PrintPacer", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            case DataFolderMoveOutcome.Failed:
+                Log.Error("Could not move the data folder from {From} to {To}: {Detail}", moved.From, moved.To, moved.Detail);
+                MessageBox.Show(
+                    $"PrintPacer could not move your jobs, settings and logs to\n\n    {moved.To}\n\n{moved.Detail}\n\n" +
+                    "You can choose another folder in Settings.",
+                    "PrintPacer", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+        }
+    }
+
+    private static void OpenFolder(string folder)
+    {
+        try
+        {
+            Directory.CreateDirectory(folder);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(folder) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not open {folder}.\n\n{ex.Message}", "PrintPacer", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// Starts a fresh copy and exits this one, for a data folder move to take effect. The new
+    /// copy waits for this one to release the single-instance mutex before it starts.
+    /// </summary>
+    internal void Restart()
+    {
+        if (Environment.ProcessPath is not { } executable) return;
+
+        Log.Information("Restarting to apply a data folder change");
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(executable, RestartArgument) { UseShellExecute = false });
+        _exiting = true;
+        Shutdown();
     }
 
     private void Start(SettingsStore settingsStore, AppSettings settings, bool startMinimised)
@@ -293,7 +427,7 @@ public partial class App : Application
 
         LogSetup.Shutdown();
 
-        _singleInstance?.ReleaseMutex();
+        if (_ownsSingleInstance) _singleInstance?.ReleaseMutex();
         _singleInstance?.Dispose();
 
         base.OnExit(e);

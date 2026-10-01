@@ -66,7 +66,7 @@ winget install JRSoftware.InnoSetup
 .\build.ps1 -Installer
 ```
 
-Produces `installer\output\PrintPacer-Setup-1.4.0.exe` — a single 51 MB file
+Produces `installer\output\PrintPacer-Setup-1.7.0.exe` — a single 51 MB file
 compressed from the 157 MB payload, which a user downloads and double-clicks.
 
 Installs for all users, with a Start Menu shortcut, an optional Desktop
@@ -92,19 +92,45 @@ The folder has to be PrintPacer's own because the uninstaller removes it. It
 removes only the files setup installed, and the folder only if that leaves it
 empty, so anything else someone keeps there survives.
 
+**The data folder is the user's choice too.** The next page, *Choose where to
+keep your jobs*, is pre-filled with the folder in use (`%LOCALAPPDATA%\PrintPacer`
+unless it was changed). Setup never moves data itself: a different folder is
+recorded in `HKCU\Software\PrintPacer` as `PendingDataFolder`, and PrintPacer
+moves the jobs, settings and logs when it next starts, before it opens anything.
+It copies every file, checks each copy byte for byte, records the new folder as
+`DataFolder`, and only then deletes the originals. A failure before that point
+removes the partial copy and keeps the old folder in use. A folder that already
+holds PrintPacer data is used as it is, with nothing copied over it.
+
+| Chosen data folder | What setup and PrintPacer do |
+|---|---|
+| A drive root, or a folder already holding other things | Offer `<folder>\PrintPacer` instead |
+| A folder already holding PrintPacer data | Use it as it is |
+| A network share or mapped network drive | Refuse — SQLite's write-ahead log is not safe there |
+| Program Files or the Windows folder | Refuse — a standard user cannot write there |
+| Inside the program folder, or containing it | Refuse |
+| Inside the current data folder, or containing it | Refuse |
+
+PrintPacer checks the folder again at startup, as the user, because an elevated
+setup cannot tell what the user may write to. The choice can also be changed
+later in **Settings → Storage → Change…**. The Start Menu's *PrintPacer data
+folder* shortcut runs `PrintPacer.exe --open-data-folder`, which opens whatever
+the folder is now.
+
 Installing needs administrator approval because it writes to Program Files.
 Running the application afterwards does not: PrintPacer needs no elevated
 privileges to read print queues, submit jobs or cancel its own jobs, and its
-data lives in the per-user `%LOCALAPPDATA%\PrintPacer`. A user who cannot
-elevate is offered a per-user install instead.
+data folder is per user. A user who cannot elevate is offered a per-user
+install instead.
 
 Useful switches:
 
 ```powershell
-PrintPacer-Setup-1.4.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-PrintPacer-Setup-1.4.0.exe /VERYSILENT /TASKS=desktopicon
-PrintPacer-Setup-1.4.0.exe /VERYSILENT /DIR="D:\Apps\PrintPacer"
-PrintPacer-Setup-1.4.0.exe /LOG=setup.log
+PrintPacer-Setup-1.7.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+PrintPacer-Setup-1.7.0.exe /VERYSILENT /TASKS=desktopicon
+PrintPacer-Setup-1.7.0.exe /VERYSILENT /DIR="D:\Apps\PrintPacer"
+PrintPacer-Setup-1.7.0.exe /VERYSILENT /DATADIR="D:\PrintPacer data"
+PrintPacer-Setup-1.7.0.exe /LOG=setup.log
 ```
 
 The setup declares `AppMutex`, so if PrintPacer is running when an upgrade
@@ -121,21 +147,30 @@ administrator step at all:
 ```
 
 Per-user install, Start Menu shortcut, and an entry in **Settings → Apps →
-Installed apps**. Before copying anything it asks where to install: press
+Installed apps**. Before copying anything it asks where to install — press
 Enter for `%LOCALAPPDATA%\Programs\PrintPacer` (or the previous install's
-folder), **B** to browse for one, or type a path. The same checks as setup.exe
-apply, and it records the files it installed in `install-manifest.txt`, so an
-upgrade, a move or an uninstall removes those files and nothing else.
+folder), **B** to browse for one, or type a path — and then, the same way,
+where to keep the jobs, settings and logs. The same checks as setup.exe apply,
+and a different data folder is recorded for PrintPacer to move to, exactly as
+setup.exe does. It records the program files it installed in
+`install-manifest.txt`, so an upgrade, a move or an uninstall removes those
+files and nothing else.
 
 ```powershell
 .\Install-PrintPacer.ps1 -InstallDir D:\Apps\PrintPacer   # no question asked
+.\Install-PrintPacer.ps1 -DataDir "D:\PrintPacer data"     # no question asked
 .\Install-PrintPacer.ps1 -DesktopShortcut
 .\Install-PrintPacer.ps1 -Uninstall
 .\Install-PrintPacer.ps1 -Uninstall -RemoveData   # also deletes jobs, settings, logs
 ```
 
-Both paths leave `%LOCALAPPDATA%\PrintPacer` alone on upgrade and on uninstall,
-so upgrading mid-job does not lose the job and the logs survive removal.
+`-RemoveData` deletes PrintPacer's own files from the data folder, wherever it
+is, and the folder only if that leaves it empty.
+
+Both paths leave the data folder alone on upgrade and on uninstall, so
+upgrading mid-job does not lose the job and the logs survive removal. The
+record of where it is (`HKCU\Software\PrintPacer`) stays too, so a reinstall
+finds the jobs again.
 
 ---
 
@@ -164,7 +199,7 @@ PrintPacer.sln
 │   ├── Themes/                  Styles
 │   └── Assets/                  Icon
 │
-├── tests/PrintPacer.Tests/      70 tests
+├── tests/PrintPacer.Tests/      252 tests
 ├── tools/PrintPacer.Probe/      Diagnostics. Not shipped.
 ├── installer/                   Installer scripts
 └── docs/                        Documentation
@@ -203,6 +238,9 @@ its own data folder:
 ```powershell
 .\src\PrintPacer.App\bin\Debug\net8.0-windows\PrintPacer.exe --data-dir=C:\Temp\pp-sandbox
 ```
+
+`--data-dir` also ignores the user's chosen data folder and any pending move, and
+hides **Change…** in Settings, so a sandbox can never move or redirect real data.
 
 `verify` is the interesting one: it fingerprints every page of both files and
 matches printed pages back to source pages, which works even though the output

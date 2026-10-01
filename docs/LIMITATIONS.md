@@ -231,8 +231,17 @@ Considered and deliberately left out of this version:
 - **PDFs are never copied.** They are read from where they are. No temporary
   copies of your document are created.
 - **No telemetry**, no analytics, no update check, no cloud service.
-- Data lives in `%LOCALAPPDATA%\PrintPacer` and is left there on uninstall so
-  logs remain available. Remove it by hand, or uninstall with `-RemoveData`.
+- Data lives in `%LOCALAPPDATA%\PrintPacer`, or the folder the user chose in
+  setup or Settings, and is left there on uninstall so logs remain available.
+  Remove it by hand, or uninstall with `-RemoveData`.
+- **The data folder must be local.** SQLite's write-ahead log does not work
+  reliably over a network share, so network folders are refused. A folder on a
+  removable drive works, but PrintPacer cannot start while that drive is
+  missing: it asks to retry, to fall back to the standard folder, or to close.
+- **The data folder choice is per user**, kept in `HKCU\Software\PrintPacer`.
+  An all-users setup records it for the user who runs setup; another user of
+  the same computer starts with the standard folder and can change it in
+  Settings.
 
 ---
 

@@ -116,6 +116,13 @@ public sealed class QueueItemViewModel : ObservableObject
         _ => "TextSecondary",
     });
 
+    /// <summary>The number chip: the status colour, or indigo for a job that has not started.</summary>
+    public Brush BadgeForeground => Snapshot.State switch
+    {
+        JobState.Draft or JobState.Queued => Resource("HueIndigo"),
+        _ => StatusForeground,
+    };
+
     public Brush StatusBackground => Resource(Snapshot.State switch
     {
         JobState.Completed => "SuccessSoft",

@@ -65,11 +65,14 @@ PrintPacer just asks you to confirm more often, which is the honest trade.
 **Requirements:** Windows 10 or 11, 64-bit. Nothing else — the build is
 self-contained, so .NET does not need to be installed.
 
-Double-click **`PrintPacer-Setup-1.4.0.exe`** (51 MB). Before anything is
-copied it asks where to install — `C:\Program Files\PrintPacer` unless you
-choose another folder or drive — then adds a Start Menu shortcut, offers a
-Desktop shortcut, and registers a proper uninstaller in **Settings → Apps**.
-Running setup again lets you move an existing install; the old copy is removed.
+Double-click **`PrintPacer-Setup-1.7.0.exe`** (51 MB). Before anything is
+copied it asks two things: where to install the program —
+`C:\Program Files\PrintPacer` unless you choose another folder or drive — and
+where to keep your jobs, settings and logs — `%LOCALAPPDATA%\PrintPacer` unless
+you choose another. It then adds a Start Menu shortcut, offers a Desktop
+shortcut, and registers a proper uninstaller in **Settings → Apps**. Running
+setup again lets you move either one; the old program copy is removed, and
+existing jobs move to a new data folder the next time PrintPacer starts.
 
 Installing needs administrator approval, as anything writing to Program Files
 does. **Running** PrintPacer afterwards does not: it works entirely as a
@@ -148,13 +151,20 @@ uploaded or sent anywhere. There is no telemetry, no analytics and no update
 check. The only network traffic is to your own printer on your own network, and
 only to read its status and page counter — the app never writes a setting to it.
 
-Your data lives in `%LOCALAPPDATA%\PrintPacer`:
+Your data lives in one folder, `%LOCALAPPDATA%\PrintPacer` unless you chose
+another during setup or in **Settings → Storage → Change…**:
 
 ```
 jobs.db          Job, batch and attempt history (SQLite)
 settings.json    Preferences
 logs\            Rolling daily logs, kept 30 days by default
 ```
+
+Changing the folder moves the data the next time PrintPacer starts, before it
+opens anything: every file is copied and checked byte for byte, and the old
+copies are removed only after that. If the move cannot be made, PrintPacer
+keeps using the old folder and says why. The folder has to be on this computer
+— the job database cannot be kept safely on a network drive.
 
 Uninstalling leaves that folder in place, so a log is still available afterwards.
 

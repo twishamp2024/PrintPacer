@@ -1,9 +1,10 @@
 namespace PrintPacer.Core.Persistence;
 
 /// <summary>
-/// Every location the application writes to. All of it lives under the per-user
-/// application data directory, so the app needs no administrator rights and leaves
-/// nothing outside the user's own profile.
+/// Every location the application writes to. All of it lives under one data folder: the
+/// per-user application data directory unless the user has chosen another
+/// (<see cref="DataFolder"/>), which the application sets with <see cref="OverrideRoot"/>
+/// at startup.
 /// </summary>
 public static class AppPaths
 {
@@ -11,7 +12,10 @@ public static class AppPaths
 
     private static string? _rootOverride;
 
-    /// <summary>Redirects all storage, used by the test suite to get an isolated instance.</summary>
+    /// <summary>
+    /// Redirects all storage: to the user's chosen data folder, to a --data-dir sandbox, or,
+    /// in the test suite, to an isolated instance.
+    /// </summary>
     public static void OverrideRoot(string root)
     {
         _rootOverride = root;

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
@@ -56,8 +57,100 @@ public partial class SettingsWindow : Window
         DeviceAddress.Text = settings.DeviceAddress ?? "";
 
         LogRetention.Text = settings.LogRetentionDays.ToString(CultureInfo.InvariantCulture);
-        DataLocation.Text = $"Jobs, settings and logs are stored in {AppPaths.Root}. " +
-                            "Nothing is uploaded anywhere, and PDFs are only ever read from where they already are.";
+        DataLocation.Text = "Nothing is uploaded anywhere, and PDFs are only ever read from where they already are.";
+
+        DataFolderPath.Text = AppPaths.Root;
+        if (App.DataFolderIsSandbox)
+        {
+            // A --data-dir run must never move, or point the real install at, its sandbox.
+            ChangeDataFolderButton.Visibility = Visibility.Collapsed;
+            DataLocation.Text = "This copy was started with --data-dir, so the data folder cannot be changed here. " + DataLocation.Text;
+        }
+        else
+        {
+            try { _requestedDataFolder = _dataFolderChoice.Pending; }
+            catch (Exception ex) { Log.Warning(ex, "Could not read a pending data folder move"); }
+            ShowDataFolderMove();
+        }
+    }
+
+    // ---- Data folder ----------------------------------------------------------
+
+    private readonly RegistryDataFolderChoice _dataFolderChoice = new();
+    private string? _requestedDataFolder;
+    private bool _dataFolderChanged;
+
+    /// <summary>True when Save asked for the data to move, which happens when PrintPacer next starts.</summary>
+    public bool DataFolderMoveRequested { get; private set; }
+
+    private void ShowDataFolderMove()
+    {
+        var moving = _requestedDataFolder is not null;
+        DataFolderMove.Text = moving
+            ? $"Moves to {_requestedDataFolder} the next time PrintPacer starts. Everything is copied and " +
+              "checked before the old copy is removed."
+            : "";
+        DataFolderMove.Visibility = moving ? Visibility.Visible : Visibility.Collapsed;
+        KeepDataFolderButton.Visibility = moving ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnChangeDataFolder(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Choose where PrintPacer keeps its jobs, settings and logs",
+            InitialDirectory = Path.GetDirectoryName(_requestedDataFolder ?? AppPaths.Root) ?? "",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        var check = DataFolder.Check(dialog.FolderName, AppPaths.Root, AppContext.BaseDirectory);
+        if (!check.IsUsable)
+        {
+            MessageBox.Show(this, check.Problem, "Data folder", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (DataFolder.SamePath(check.Folder, AppPaths.Root))
+        {
+            _requestedDataFolder = null;
+        }
+        else
+        {
+            if (check.AddedSubfolder && MessageBox.Show(this,
+                    $"{dialog.FolderName} already holds other things, so PrintPacer would keep its data in a folder " +
+                    $"of its own inside it:\n\n    {check.Folder}\n\nUse that folder?",
+                    "Data folder", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            {
+                return;
+            }
+            _requestedDataFolder = check.Folder;
+        }
+
+        _dataFolderChanged = true;
+        ShowDataFolderMove();
+    }
+
+    private void OnKeepDataFolder(object sender, RoutedEventArgs e)
+    {
+        _requestedDataFolder = null;
+        _dataFolderChanged = true;
+        ShowDataFolderMove();
+    }
+
+    /// <summary>Records the move for the next start. Nothing is moved while PrintPacer runs.</summary>
+    private void SaveDataFolderChoice()
+    {
+        if (!_dataFolderChanged) return;
+        try
+        {
+            _dataFolderChoice.Pending = _requestedDataFolder;
+            DataFolderMoveRequested = _requestedDataFolder is not null;
+            Log.Information("Data folder move {Change}", _requestedDataFolder is null ? "cancelled" : $"requested to {_requestedDataFolder}");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Could not record the data folder move");
+        }
     }
 
     private static void SelectByTag(ComboBox box, string tag)
@@ -127,6 +220,7 @@ public partial class SettingsWindow : Window
         _settings.LogRetentionDays = retention;
 
         ApplyStartupRegistration(_settings.LaunchOnWindowsStartup, _settings.StartMinimised);
+        SaveDataFolderChoice();
 
         Result = _settings;
         DialogResult = true;

@@ -86,6 +86,32 @@ public partial class MainWindow : Window
         {
             _viewModel.ApplySettings(updated);
             _viewModel.RefreshPrinters();
+
+            if (window.DataFolderMoveRequested) OfferRestartForDataFolderMove();
+        }
+    }
+
+    /// <summary>
+    /// The data moves only while PrintPacer starts, when nothing has the database open. Offer
+    /// to restart now, unless the queue is busy: a restart then would interrupt printing.
+    /// </summary>
+    private void OfferRestartForDataFolderMove()
+    {
+        if (_viewModel.HasActiveWork)
+        {
+            MessageBox.Show(this,
+                "Your jobs, settings and logs will move the next time PrintPacer starts.\n\n" +
+                "The print queue is running, so PrintPacer has not restarted. When it has finished, exit " +
+                "PrintPacer from its icon in the notification area and start it again.",
+                "Data folder", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (MessageBox.Show(this,
+                "Your jobs, settings and logs move the next time PrintPacer starts.\n\nRestart PrintPacer now?",
+                "Data folder", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+        {
+            ((App)Application.Current).Restart();
         }
     }
 

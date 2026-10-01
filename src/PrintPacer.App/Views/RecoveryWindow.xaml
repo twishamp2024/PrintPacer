@@ -14,11 +14,11 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}"
-                BorderThickness="0,0,0,1" Padding="22,18">
+        <Border Grid.Row="0" Background="{StaticResource AppBar}" Padding="22,18">
             <StackPanel>
-                <TextBlock x:Name="Headline" Style="{StaticResource Title}" />
-                <TextBlock x:Name="Subhead" Style="{StaticResource Secondary}" Margin="0,4,0,0" />
+                <TextBlock x:Name="Headline" Style="{StaticResource Title}" Foreground="{StaticResource AppBarText}" />
+                <TextBlock x:Name="Subhead" Style="{StaticResource Secondary}" Foreground="{StaticResource AppBarTextSoft}"
+                           Margin="0,4,0,0" />
             </StackPanel>
         </Border>
 
