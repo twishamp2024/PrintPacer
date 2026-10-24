@@ -4,7 +4,22 @@
     <RootNamespace>PrintPacer.Core</RootNamespace>
     <AssemblyName>PrintPacer.Core</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageId>PrintPacer.Core</PackageId>
+    <Title>PrintPacer.Core</Title>
+    <Authors>Twishamp Mandal</Authors>
+    <Company>PrintPacer</Company>
+    <Description>Core batching, scheduling, PDF intake, imposition, and printer hardware monitoring library for PrintPacer.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/twishamp2024/PrintPacer</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/twishamp2024/PrintPacer.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>printing;pdf;batch-printing;windows-spooler;job-engine</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Docnet.Core" Version="2.6.0" />
     <PackageReference Include="PdfSharp" Version="6.1.1" />
